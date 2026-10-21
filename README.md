@@ -113,7 +113,7 @@ user/install-user.sh                  # as your user: speaker crossover, tweeter
 user/firefox-vaapi.sh ~/.mozilla/firefox/<profile>   # as your user, Firefox closed
 ```
 
-Then log out and back in once. Tone control for the speakers:
+Then log out and back in once. `bash tools/check.sh` checks every component (OK / WARN / FAIL). Tone control for the speakers:
 
 ```
 proart-eq                    # show: bass, mid, presence, treble (dB)
