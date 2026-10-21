@@ -209,6 +209,26 @@ inside snaps still fail). The proper fix is adding `libnvidia-rmapi-tegra.so*` t
 - CPU: EAS is active (`sched_energy_aware=1`, capacities 699 / 998 / 1024), cpuidle uses the
   LPI WFI and core-off states, USB devices runtime-suspend, PipeWire suspends the codecs when idle.
 
+## 5c. Phone calls through a paired phone
+
+PipeWire 1.6's native Bluetooth backend can act as the hands-free unit (HFP HF) for a phone and
+publish it over D-Bus (`bluez5.telephony-dbus-service`). GNOME Calls only has an oFono provider:
+
+- The real oFono package conflicts with ModemManager in Ubuntu; installing it removes GNOME Calls.
+- PipeWire's oFono emulation (`bluez5.telephony.provide-ofono`) returns the modem without the
+  `Interfaces` property (Calls only accepts modems with `org.ofono.VoiceCallManager` there) and
+  has a one-argument `Dial` (oFono: number + caller-ID mode).
+- `bluez5.telephony.use-system-bus = false` is ignored in 1.6.2; the service is always on the
+  system bus, so the desktop user needs a policy to own the names.
+- Calls are announced on each phone object's own ObjectManager (`.../ag1`), not on the root.
+
+`user/bin/proart-phone-bridge` owns `org.ofono`, presents every PipeWire phone as a modem (name
+from BlueZ) and forwards Dial/Answer/Hangup. GNOME Calls' mute and speaker buttons go through
+callaudiod, which looks for a phone sound card with a voice-call profile and fails here; the
+bridge also provides `org.mobian_project.CallAudio` and mutes the microphone stream PipeWire
+sends to the phone. A Xiaomi 15T negotiated LC3-SWB first and fell back to CVSD (narrowband);
+WirePlumber links the call streams to the default output (the 2-way speakers) and microphone.
+
 ## 6. Touchpad
 
 The touchpad delivered ~120 reports/s with positions, pressure and even `BTN_LEFT` on firm presses,

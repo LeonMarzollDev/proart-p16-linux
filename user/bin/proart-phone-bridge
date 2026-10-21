@@ -1,0 +1,329 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""Phone calls through a paired mobile phone in GNOME Calls (Bluetooth hands-free).
+
+PipeWire (1.6) acts as the Bluetooth hands-free unit for a paired phone and publishes the phone
+and its calls on the system bus (org.pipewire.Telephony, WirePlumber settings
+bluez5.telephony-dbus-service and bluez5.telephony.use-system-bus). GNOME Calls only talks to
+oFono on the system bus, and PipeWire's own oFono emulation lacks what Calls needs (the modem's
+"Interfaces" property, the two-argument Dial). This bridge owns org.ofono on the system bus and
+presents every phone PipeWire knows as an oFono modem with voice calls, forwarding the calls to
+PipeWire.
+The system bus policy that lets the desktop user own both names is
+config/dbus/proart-phone-bridge.conf.
+
+It also replaces callaudiod (org.mobian_project.CallAudio on the session bus), which GNOME Calls
+uses for its mute and speaker buttons: callaudiod expects a phone sound card with a voice-call
+profile and fails on a laptop. Here "mute" mutes the microphone stream that PipeWire sends to the
+phone; the speaker button only reports its state, as a laptop has no earpiece.
+"""
+import json
+import subprocess
+import sys
+
+from gi.repository import Gio, GLib
+
+PW_NAME = "org.pipewire.Telephony"
+PW_AG = "org.pipewire.Telephony.AudioGateway1"
+PW_CALL = "org.pipewire.Telephony.Call1"
+OFONO = "org.ofono"
+VCM = "org.ofono.VoiceCallManager"
+
+INTROSPECTION = Gio.DBusNodeInfo.new_for_xml("""<node>
+ <interface name='org.ofono.Manager'>
+  <method name='GetModems'><arg type='a(oa{sv})' direction='out'/></method>
+  <signal name='ModemAdded'><arg type='o'/><arg type='a{sv}'/></signal>
+  <signal name='ModemRemoved'><arg type='o'/></signal>
+ </interface>
+ <interface name='org.ofono.Modem'>
+  <method name='GetProperties'><arg type='a{sv}' direction='out'/></method>
+  <method name='SetProperty'><arg type='s' direction='in'/><arg type='v' direction='in'/></method>
+  <signal name='PropertyChanged'><arg type='s'/><arg type='v'/></signal>
+ </interface>
+ <interface name='org.ofono.VoiceCallManager'>
+  <method name='GetProperties'><arg type='a{sv}' direction='out'/></method>
+  <method name='Dial'><arg type='s' direction='in'/><arg type='s' direction='in'/>
+   <arg type='o' direction='out'/></method>
+  <method name='GetCalls'><arg type='a(oa{sv})' direction='out'/></method>
+  <method name='HangupAll'/>
+  <method name='SwapCalls'/>
+  <method name='ReleaseAndAnswer'/>
+  <method name='ReleaseAndSwap'/>
+  <method name='HoldAndAnswer'/>
+  <method name='SendTones'><arg type='s' direction='in'/></method>
+  <signal name='CallAdded'><arg type='o'/><arg type='a{sv}'/></signal>
+  <signal name='CallRemoved'><arg type='o'/></signal>
+  <signal name='PropertyChanged'><arg type='s'/><arg type='v'/></signal>
+ </interface>
+ <interface name='org.ofono.VoiceCall'>
+  <method name='GetProperties'><arg type='a{sv}' direction='out'/></method>
+  <method name='Answer'/>
+  <method name='Hangup'/>
+  <signal name='PropertyChanged'><arg type='s'/><arg type='v'/></signal>
+ </interface>
+</node>""")
+IFACE = {i.name: i for i in INTROSPECTION.interfaces}
+CALL_AUDIO = Gio.DBusNodeInfo.new_for_xml("""<node>
+ <interface name='org.mobian_project.CallAudio'>
+  <method name='SelectMode'><arg type='u' direction='in'/><arg type='b' direction='out'/></method>
+  <method name='EnableSpeaker'><arg type='b' direction='in'/><arg type='b' direction='out'/>
+  </method>
+  <method name='MuteMic'><arg type='b' direction='in'/><arg type='b' direction='out'/></method>
+  <property name='AudioMode' type='u' access='read'/>
+  <property name='SpeakerState' type='u' access='read'/>
+  <property name='MicState' type='u' access='read'/>
+ </interface>
+</node>""").interfaces[0]
+CALL_DEFAULTS = {"LineIdentification": GLib.Variant("s", ""), "Name": GLib.Variant("s", ""),
+                 "State": GLib.Variant("s", "disconnected"),
+                 "Multiparty": GLib.Variant("b", False), "Emergency": GLib.Variant("b", False),
+                 "RemoteHeld": GLib.Variant("b", False),
+                 "RemoteMultiparty": GLib.Variant("b", False)}
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+class Bridge:
+    def __init__(self):
+        self.system = Gio.bus_get_sync(Gio.BusType.SYSTEM)
+        self.manager = None      # ObjectManagerClient for PipeWire's phones
+        self.call_managers = {}  # phone path -> ObjectManagerClient for its calls
+        self.modems = {}         # path -> registration ids
+        self.calls = {}          # path -> registration id
+        self.system.register_object("/", IFACE["org.ofono.Manager"], self.on_manager_call)
+        Gio.bus_own_name_on_connection(self.system, OFONO, Gio.BusNameOwnerFlags.NONE,
+                                       lambda *a: log("owning org.ofono"),
+                                       lambda *a: sys.exit("org.ofono is owned by someone else"))
+        Gio.bus_watch_name_on_connection(self.system, PW_NAME, Gio.BusNameWatcherFlags.NONE,
+                                         self.on_pipewire_appeared, self.on_pipewire_vanished)
+
+    # --- PipeWire side --------------------------------------------------------------------
+    def on_pipewire_appeared(self, conn, name, owner):
+        log("PipeWire telephony appeared")
+        self.manager = self.object_manager("/org/pipewire/Telephony")
+        for obj in self.manager.get_objects():
+            self.add_object(obj)
+
+    def object_manager(self, path):
+        """PipeWire lists phones under /org/pipewire/Telephony and each phone's calls under the
+        phone's own ObjectManager"""
+        manager = Gio.DBusObjectManagerClient.new_sync(
+            self.system, Gio.DBusObjectManagerClientFlags.NONE, PW_NAME, path, None, None, None)
+        manager.connect("object-added", lambda m, o: self.add_object(o))
+        manager.connect("object-removed", lambda m, o: self.remove_object(o.get_object_path()))
+        manager.connect("interface-proxy-properties-changed", self.on_properties_changed)
+        return manager
+
+    def on_pipewire_vanished(self, conn, name):
+        for path in list(self.calls):
+            self.remove_object(path)
+        for path in list(self.modems):
+            self.remove_object(path)
+        self.manager = None
+
+    def proxy(self, path, iface):
+        for manager in [self.manager, *self.call_managers.values()]:
+            obj = manager.get_object(path) if manager else None
+            if obj and obj.get_interface(iface):
+                return obj.get_interface(iface)
+        return None
+
+    def add_object(self, obj):
+        path = obj.get_object_path()
+        if obj.get_interface(PW_AG) and path not in self.modems:
+            self.modems[path] = [
+                self.system.register_object(path, IFACE["org.ofono.Modem"], self.on_modem_call),
+                self.system.register_object(path, IFACE[VCM], self.on_vcm_call)]
+            log(f"phone {self.phone_name(path)} at {path}")
+            self.emit("/", "org.ofono.Manager", "ModemAdded",
+                      GLib.Variant("(oa{sv})", (path, self.modem_props(path))))
+            self.call_managers[path] = self.object_manager(path)
+            for call in self.call_managers[path].get_objects():
+                self.add_object(call)
+        elif obj.get_interface(PW_CALL) and path not in self.calls:
+            self.calls[path] = self.system.register_object(path, IFACE["org.ofono.VoiceCall"],
+                                                           self.on_call_call)
+            props = self.call_props(path)
+            log(f"call {path}: {props['State'].unpack()} {props['LineIdentification'].unpack()}")
+            self.emit(path.rsplit("/", 1)[0], VCM, "CallAdded",
+                      GLib.Variant("(oa{sv})", (path, props)))
+
+    def remove_object(self, path):
+        if path in self.calls:
+            self.system.unregister_object(self.calls.pop(path))
+            self.emit(path.rsplit("/", 1)[0], VCM, "CallRemoved", GLib.Variant("(o)", (path,)))
+            log(f"call {path} ended")
+        elif path in self.modems:
+            for call in [c for c in self.calls if c.startswith(path + "/")]:
+                self.remove_object(call)
+            for reg in self.modems.pop(path):
+                self.system.unregister_object(reg)
+            self.call_managers.pop(path, None)
+            self.emit("/", "org.ofono.Manager", "ModemRemoved", GLib.Variant("(o)", (path,)))
+            log(f"phone at {path} gone")
+
+    def on_properties_changed(self, manager, obj, proxy, changed, invalidated):
+        path = obj.get_object_path()
+        if proxy.get_interface_name() == PW_CALL and path in self.calls:
+            for name, value in changed.unpack().items():
+                if name in CALL_DEFAULTS:
+                    self.emit(path, "org.ofono.VoiceCall", "PropertyChanged",
+                              GLib.Variant("(sv)", (name, changed.lookup_value(name, None))))
+
+    def forward(self, invocation, path, iface, method, args=None):
+        def done(proxy, res):
+            try:
+                proxy.call_finish(res)
+                invocation.return_value(None)
+            except GLib.Error as e:
+                invocation.return_dbus_error("org.ofono.Error.Failed", e.message)
+        p = self.proxy(path, iface)
+        if not p:
+            invocation.return_dbus_error("org.ofono.Error.NotFound", path)
+            return
+        p.call(method, args, Gio.DBusCallFlags.NONE, -1, None, done)
+
+    # --- oFono side -------------------------------------------------------------------------
+    def emit(self, path, iface, signal, params):
+        self.system.emit_signal(None, path, iface, signal, params)
+
+    def phone_name(self, path):
+        ag = self.proxy(path, PW_AG)
+        address = ag.get_cached_property("Address").unpack() if ag else ""
+        try:
+            objects = self.system.call_sync("org.bluez", "/", "org.freedesktop.DBus.ObjectManager",
+                                            "GetManagedObjects", None, None,
+                                            Gio.DBusCallFlags.NONE, 2000, None).unpack()[0]
+            for ifaces in objects.values():
+                dev = ifaces.get("org.bluez.Device1", {})
+                if dev.get("Address") == address:
+                    return dev.get("Alias") or address
+        except GLib.Error:
+            pass
+        return address or "Phone"
+
+    def modem_props(self, path):
+        return {"Name": GLib.Variant("s", self.phone_name(path)),
+                "Manufacturer": GLib.Variant("s", ""), "Model": GLib.Variant("s", "Bluetooth"),
+                "Interfaces": GLib.Variant("as", [VCM]), "Features": GLib.Variant("as", []),
+                "Online": GLib.Variant("b", True), "Powered": GLib.Variant("b", True),
+                "Type": GLib.Variant("s", "hfp")}
+
+    def call_props(self, path):
+        props = dict(CALL_DEFAULTS)
+        call = self.proxy(path, PW_CALL)
+        for name in ("LineIdentification", "Name", "State", "Multiparty"):
+            value = call.get_cached_property(name) if call else None
+            if value is not None:
+                props[name] = value
+        return props
+
+    def on_manager_call(self, conn, sender, path, iface, method, params, invocation):
+        if method == "GetModems":
+            modems = [(p, self.modem_props(p)) for p in self.modems]
+            invocation.return_value(GLib.Variant("(a(oa{sv}))", (modems,)))
+
+    def on_modem_call(self, conn, sender, path, iface, method, params, invocation):
+        if method == "GetProperties":
+            invocation.return_value(GLib.Variant("(a{sv})", (self.modem_props(path),)))
+        else:  # SetProperty: the phone is always powered and online
+            invocation.return_value(None)
+
+    def on_vcm_call(self, conn, sender, path, iface, method, params, invocation):
+        if method == "GetProperties":
+            invocation.return_value(GLib.Variant("(a{sv})", ({"EmergencyNumbers":
+                                                                GLib.Variant("as", [])},)))
+        elif method == "GetCalls":
+            calls = [(c, self.call_props(c)) for c in self.calls if c.startswith(path + "/")]
+            invocation.return_value(GLib.Variant("(a(oa{sv}))", (calls,)))
+        elif method == "Dial":
+            number = params.unpack()[0]
+            log(f"dial {number}")
+            ag = self.proxy(path, PW_AG)
+            if not ag:
+                invocation.return_dbus_error("org.ofono.Error.NotFound", path)
+                return
+
+            def done(proxy, res):
+                try:
+                    proxy.call_finish(res)
+                    invocation.return_value(GLib.Variant("(o)", ("/",)))
+                except GLib.Error as e:
+                    invocation.return_dbus_error("org.ofono.Error.Failed", e.message)
+            ag.call("Dial", GLib.Variant("(s)", (number,)), Gio.DBusCallFlags.NONE, -1, None,
+                    done)
+        else:  # HangupAll, SwapCalls, ..., SendTones: same name in PipeWire
+            self.forward(invocation, path, PW_AG, method, params)
+
+    def on_call_call(self, conn, sender, path, iface, method, params, invocation):
+        if method == "GetProperties":
+            invocation.return_value(GLib.Variant("(a{sv})", (self.call_props(path),)))
+        else:  # Answer, Hangup
+            log(f"{method.lower()} {path}")
+            self.forward(invocation, path, PW_CALL, method)
+
+
+class CallAudio:
+    """org.mobian_project.CallAudio for GNOME Calls' mute and speaker buttons"""
+    PATH = "/org/mobian_project/CallAudio"
+
+    def __init__(self):
+        self.session = Gio.bus_get_sync(Gio.BusType.SESSION)
+        self.state = {"AudioMode": 0, "SpeakerState": 1, "MicState": 1}
+        self.session.register_object(self.PATH, CALL_AUDIO, self.on_call, self.on_get_property,
+                                     None)
+        Gio.bus_own_name_on_connection(self.session, "org.mobian_project.CallAudio",
+                                       Gio.BusNameOwnerFlags.REPLACE,
+                                       lambda *a: log("owning org.mobian_project.CallAudio"),
+                                       lambda *a: log("CallAudio name not available"))
+
+    def on_get_property(self, conn, sender, path, iface, name):
+        return GLib.Variant("u", self.state[name])
+
+    def set(self, name, value):
+        if self.state[name] != value:
+            self.state[name] = value
+            self.session.emit_signal(None, self.PATH, "org.freedesktop.DBus.Properties",
+                                     "PropertiesChanged",
+                                     GLib.Variant("(sa{sv}as)", (CALL_AUDIO.name,
+                                                                 {name: GLib.Variant("u", value)},
+                                                                 [])))
+
+    @staticmethod
+    def phone_mic_streams():
+        """PipeWire stream nodes that carry the laptop microphone to a phone"""
+        try:
+            dump = json.loads(subprocess.run(["pw-dump"], capture_output=True, text=True,
+                                             timeout=5).stdout)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return []
+        nodes = [o for o in dump if o.get("type", "").endswith("Node")]
+        return [o["id"] for o in nodes
+                if o["info"]["props"].get("node.name", "").startswith("bluez_output.")
+                and o["info"]["props"].get("media.class") == "Stream/Input/Audio"]
+
+    def mute(self, muted):
+        for node in self.phone_mic_streams():
+            subprocess.run(["wpctl", "set-mute", str(node), "1" if muted else "0"])
+        self.set("MicState", 0 if muted else 1)
+        log("microphone " + ("muted" if muted else "on"))
+
+    def on_call(self, conn, sender, path, iface, method, params, invocation):
+        arg = params.unpack()[0]
+        if method == "SelectMode":
+            self.set("AudioMode", arg)
+            if arg == 0 and self.state["MicState"] == 0:   # call over: never leave the mic muted
+                self.mute(False)
+        elif method == "EnableSpeaker":
+            self.set("SpeakerState", 1 if arg else 0)
+        elif method == "MuteMic":
+            self.mute(arg)
+        invocation.return_value(GLib.Variant("(b)", (True,)))
+
+
+if __name__ == "__main__":
+    Bridge()
+    CallAudio()
+    GLib.MainLoop().run()

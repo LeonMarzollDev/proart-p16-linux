@@ -56,6 +56,7 @@ issue), so some fixes may help there too - reports welcome.
 | 4K YouTube stutters, video decoded on the CPU | Firefox snap without NVIDIA, VA-API not set up | [`install/07-video-firefox.sh`](install/07-video-firefox.sh) |
 | Snap apps (Snap Store, Chromium/Electron/Qt apps) slow, render with llvmpipe | snapd does not expose `libnvidia-rmapi-tegra` | [`install/09-snap-gpu.sh`](install/09-snap-gpu.sh) |
 | Higher idle power draw than Windows | firmware leaves PCIe ASPM off | [`install/10-power.sh`](install/10-power.sh) |
+| GNOME Calls shows "no modem" for a Bluetooth phone, mute does nothing | PipeWire's oFono emulation is incomplete, callaudiod expects a phone | [`optional/phone-handsfree.sh`](optional/phone-handsfree.sh) |
 
 ## Hardware status
 
@@ -74,6 +75,7 @@ issue), so some fixes may help there too - reports welcome.
 | Sensors | fan 164613644 rpm, "temperatures" of 1000-6000 C | fan rpm, EC temperatures, system and SoC power (`proart_ec` hwmon); misleading ACPI zones hidden |
 | GPU in snap apps | CPU rendering (llvmpipe): snapd does not expose `libnvidia-rmapi-tegra` | NVIDIA EGL through a small glvnd shim (`install/09-snap-gpu.sh`) |
 | Wi-Fi, Bluetooth | works | works |
+| Phone calls via a paired phone | - | GNOME Calls rings, answers, dials; call audio on the laptop; mute button (`optional/phone-handsfree.sh`) |
 | Webcam, IR camera | works | works; 50 Hz anti-flicker; optional face login (Howdy: login, lock screen, sudo, optionally admin dialogs) |
 | USB-C, second M.2 slot | works / slot empty | unchanged (second slot: 2280, single-sided SSDs only per ASUS) |
 | Haptic touchpad feedback | no vibration on click | click felt on press and release (`proart-haptic.service`, strength adjustable) |
@@ -134,6 +136,7 @@ sudo bash optional/easyeffects.sh          # EasyEffects + presets (not needed w
                                            #   add --autostart for login start)
 sudo bash optional/nvbroadcast.sh          # NV Broadcast (community app, CPU modes on arm64) + v4l2loopback
 sudo bash optional/ui-control.sh           # ydotool for scripted desktop control
+sudo bash optional/phone-handsfree.sh      # phone calls through a paired phone in GNOME Calls (Bluetooth)
 ```
 
 ### Diagnostics (`tools/`)

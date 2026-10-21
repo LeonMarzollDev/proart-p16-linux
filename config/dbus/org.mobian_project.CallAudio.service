@@ -1,0 +1,6 @@
+# GNOME Calls' mute/speaker buttons: start proart-phone-bridge instead of callaudiod
+# (installed to ~/.local/share/dbus-1/services/, which takes precedence over /usr/share)
+[D-BUS Service]
+Name=org.mobian_project.CallAudio
+Exec=/bin/false
+SystemdService=proart-phone-bridge.service
