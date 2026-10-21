@@ -1,0 +1,6 @@
+{
+    "file_format_version" : "1.0.0",
+    "ICD" : {
+        "library_path" : "/var/lib/snapd/hostfs/usr/lib/aarch64-linux-gnu/libnvidia-snap-egl.so"
+    }
+}

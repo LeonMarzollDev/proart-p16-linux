@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[Desktop Entry]
+Type=Application
+Name=ProArt Fn-Lock indicator
+Comment=Shows whether F1-F12 or the media keys are primary (Fn+Esc switches)
+Exec=proart-fnlock
+Icon=input-keyboard-symbolic
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

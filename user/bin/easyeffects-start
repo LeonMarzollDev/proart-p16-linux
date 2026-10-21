@@ -1,0 +1,8 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Start EasyEffects in the background and load a preset (default: "ProArt P16 Atmos").
+# Used by the optional autostart entry from optional/easyeffects.sh.
+PRESET="${1:-ProArt P16 Atmos}"
+easyeffects --service-mode --hide-window &
+sleep 6
+easyeffects -l "$PRESET"

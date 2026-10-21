@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[Unit]
+Description=ASUS ProArt P16: enable the tweeters and mute them while headphones are plugged in
+After=pipewire.service wireplumber.service
+Wants=wireplumber.service
+
+[Service]
+ExecStart=%h/.local/bin/proart-tweeter
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

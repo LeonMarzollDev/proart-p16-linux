@@ -1,0 +1,83 @@
+Subject: [PATCH] HID: asus: cycle the standalone keyboard backlight on the hotkey
+
+Without asus-wmi (arm64 laptops such as the ASUS ProArt P16 H7607BA) the
+backlight hotkeys are only forwarded to asus-wmi, which fails, so they reach
+userspace where KEY_KBDILLUMTOGGLE merely switches the light on or off and the
+desktop shows no level.
+
+When hid-asus registered asus::kbd_backlight itself, handle the hotkeys in the
+driver: KEY_KBDILLUMTOGGLE cycles off -> 1 -> 2 -> 3 -> off like the Windows
+driver, KEY_KBDILLUMUP/DOWN step the level, the events are kept from
+userspace, and the change is reported with
+led_classdev_notify_brightness_hw_changed() so UPower and the desktop show the
+new level (LED_BRIGHT_HW_CHANGED).
+---
+--- a/drivers/hid/hid-asus.c
++++ b/drivers/hid/hid-asus.c
+@@ -359,6 +359,41 @@
+ 	return 0;
+ }
+ 
++static void asus_kbd_backlight_set(struct asus_hid_listener *listener,
++				   int brightness);
++
++/*
++ * Without asus-wmi (arm64 laptops) nothing in the kernel handles the backlight
++ * hotkeys, and userspace only knows on/off for KEY_KBDILLUMTOGGLE. Step the
++ * level here the way the Windows driver does (the backlight key cycles
++ * off -> 1 -> 2 -> 3 -> off) and report it as a hardware change, so that UPower
++ * and the desktop show the new level.
++ */
++static void asus_kbd_backlight_key(struct asus_kbd_leds *led, unsigned int code)
++{
++	unsigned int level;
++	unsigned long flags;
++
++	spin_lock_irqsave(&led->lock, flags);
++	level = led->brightness;
++	spin_unlock_irqrestore(&led->lock, flags);
++
++	switch (code) {
++	case KEY_KBDILLUMUP:
++		level = min_t(unsigned int, level + 1, ASUS_EV_MAX_BRIGHTNESS);
++		break;
++	case KEY_KBDILLUMDOWN:
++		level = level ? level - 1 : 0;
++		break;
++	default:	/* KEY_KBDILLUMTOGGLE */
++		level = (level + 1) % (ASUS_EV_MAX_BRIGHTNESS + 1);
++		break;
++	}
++
++	asus_kbd_backlight_set(&led->listener, level);
++	led_classdev_notify_brightness_hw_changed(&led->cdev, level);
++}
++
+ static int asus_event(struct hid_device *hdev, struct hid_field *field,
+ 		      struct hid_usage *usage, __s32 value)
+ {
+@@ -371,6 +406,16 @@
+ 			 usage->hid & HID_USAGE);
+ 	}
+ 
++	/* standalone backlight: handle the hotkeys here and keep them from userspace */
++	if (usage->type == EV_KEY && drvdata->kbd_backlight &&
++	    drvdata->kbd_backlight->standalone &&
++	    (usage->code == KEY_KBDILLUMUP || usage->code == KEY_KBDILLUMDOWN ||
++	     usage->code == KEY_KBDILLUMTOGGLE)) {
++		if (value == 1)
++			asus_kbd_backlight_key(drvdata->kbd_backlight, usage->code);
++		return 1;
++	}
++
+ 	if (usage->type == EV_KEY && value) {
+ 		switch (usage->code) {
+ 		case KEY_KBDILLUMUP:
+@@ -840,6 +885,7 @@
+ 		drvdata->kbd_backlight->standalone = true;
+ 		drvdata->kbd_backlight->cdev.name = "asus::kbd_backlight";
+ 		drvdata->kbd_backlight->cdev.max_brightness = ASUS_EV_MAX_BRIGHTNESS;
++		drvdata->kbd_backlight->cdev.flags = LED_BRIGHT_HW_CHANGED;
+ 		drvdata->kbd_backlight->cdev.brightness_set = asus_kbd_led_set;
+ 		drvdata->kbd_backlight->cdev.brightness_get = asus_kbd_led_get;
+ 		ret = devm_led_classdev_register(&hdev->dev,

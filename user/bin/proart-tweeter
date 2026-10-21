@@ -1,0 +1,41 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# ASUS ProArt P16: enable the tweeters (Cirrus CS42L43 speaker amp) and mute them while headphones are plugged in.
+# The tweeters sit on the DL1/DP5 path (UCM device "Headphones"); the crossover in
+# ~/.config/pipewire/pipewire.conf.d/60-proart-2way.conf feeds them through the virtual sink proart_speakers.
+CARD=mt8901soundwire
+SPEAKERS=proart_speakers
+HEADPHONES=alsa_output.platform-mtk_sdw_mc.HiFi__Headphones__sink
+
+routing() {
+	amixer -q -c $CARD cset name='cs42l43 Speaker L Input 1' DP5RX1
+	amixer -q -c $CARD cset name='cs42l43 Speaker R Input 1' DP5RX2
+	amixer -q -c $CARD cset name='cs42l43 Speaker Digital Volume' 128,128
+}
+
+apply_jack() {
+	if amixer -c $CARD cget iface=CARD,name='Headphone Jack' | grep -q ': values=on'; then
+		amixer -q -c $CARD cset name='cs42l43 Speaker Digital Switch' off,off
+		target=$HEADPHONES
+	else
+		amixer -q -c $CARD cset name='cs42l43 Speaker Digital Switch' on,on
+		target=$SPEAKERS
+	fi
+	id=$("$HOME/.local/bin/pw-id" "$target")
+	[ -n "$id" ] && wpctl set-default "$id"
+}
+
+# wait until PipeWire has created the sinks
+for _ in $(seq 1 30); do
+	[ -n "$("$HOME/.local/bin/pw-id" $SPEAKERS)" ] && break
+	sleep 1
+done
+routing
+apply_jack
+stdbuf -oL alsactl monitor "hw:CARD=$CARD" | while read -r line; do
+	case "$line" in
+		*"Headphone Jack"*) apply_jack ;;
+	esac
+done
+# the monitor ended -> let systemd restart us
+exit 1

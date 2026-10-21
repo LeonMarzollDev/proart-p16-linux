@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""Haptic click feedback for the ASUS ProArt P16 H7607BA touchpad (PixArt 093A:4F01).
+
+The pad reports clicks itself (BTN_LEFT on a firm press) and has a haptic actuator, but its HID
+descriptor only has a manual trigger (output report 0x45: waveform ordinal, intensity) and no
+auto trigger. So neither the firmware nor the kernel's hid-haptic (which needs both) vibrates on
+a click. This service plays one waveform when the click goes down and one when it comes up.
+
+Settings in /etc/default/proart-haptic:
+  PRESS=5       waveform ordinal 3-7 on press (0 = off); the pad's waveforms last 13/21/24/26/28 ms
+  RELEASE=3     waveform ordinal on release (0 = off)
+  INTENSITY=3   0-4
+Usage: proart-haptic          run (as the systemd service)
+       proart-haptic test     play the waveforms 3-7 one after another
+"""
+import glob
+import os
+import struct
+import sys
+import time
+
+HID_GLOB = "/sys/bus/hid/devices/*:093A:4F01.*"
+CONFIG = "/etc/default/proart-haptic"
+EV_KEY, BTN_LEFT = 0x01, 0x110
+EVENT = struct.Struct("qqHHi")  # struct input_event on 64-bit
+REPORT_TRIGGER = 0x45
+
+
+def settings():
+    conf = {"PRESS": 5, "RELEASE": 3, "INTENSITY": 3}
+    try:
+        with open(CONFIG) as f:
+            for line in f:
+                key, _, value = line.partition("=")
+                if key.strip() in conf and value.strip().isdigit():
+                    conf[key.strip()] = int(value.strip())
+    except FileNotFoundError:
+        pass
+    conf["INTENSITY"] = min(conf["INTENSITY"], 4)
+    return conf
+
+
+def find_devices():
+    """(hidraw node, touchpad event node) or None while the pad is not there"""
+    for hid in glob.glob(HID_GLOB):
+        raw = glob.glob(hid + "/hidraw/hidraw*")
+        for inp in glob.glob(hid + "/input/input*"):
+            with open(inp + "/name") as f:
+                if not f.read().strip().endswith("Touchpad"):
+                    continue
+            ev = glob.glob(inp + "/event*")
+            if raw and ev:
+                return "/dev/" + os.path.basename(raw[0]), "/dev/input/" + os.path.basename(ev[0])
+    return None
+
+
+def play(fd, ordinal, intensity):
+    if ordinal:
+        os.write(fd, bytes([REPORT_TRIGGER, ordinal, intensity]))
+
+
+def test():
+    conf = settings()
+    raw, _ = find_devices() or sys.exit("touchpad not found")
+    fd = os.open(raw, os.O_WRONLY)
+    print("Rest a finger lightly on the touchpad.")
+    for ordinal in range(3, 8):
+        time.sleep(1.5)
+        print(f"waveform {ordinal}")
+        play(fd, ordinal, conf["INTENSITY"])
+    os.close(fd)
+
+
+def run():
+    while True:
+        devs = find_devices()
+        if not devs:
+            time.sleep(2)
+            continue
+        conf = settings()
+        raw = ev = -1
+        try:
+            raw = os.open(devs[0], os.O_WRONLY)
+            ev = os.open(devs[1], os.O_RDONLY)
+            print(f"touchpad {devs[1]}, haptics {devs[0]}, press {conf['PRESS']}, "
+                  f"release {conf['RELEASE']}, intensity {conf['INTENSITY']}", flush=True)
+            while True:
+                data = os.read(ev, EVENT.size * 64)
+                for _, _, typ, code, value in EVENT.iter_unpack(data):
+                    if typ == EV_KEY and code == BTN_LEFT and value in (0, 1):
+                        play(raw, conf["PRESS"] if value else conf["RELEASE"], conf["INTENSITY"])
+        except OSError as e:
+            # the pad goes away on suspend/driver reload; wait for it to come back
+            print(f"touchpad lost ({e}), waiting", flush=True)
+            time.sleep(1)
+        finally:
+            for fd in (raw, ev):
+                if fd >= 0:
+                    os.close(fd)
+
+
+if __name__ == "__main__":
+    test() if sys.argv[1:] == ["test"] else run()

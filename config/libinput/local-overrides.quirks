@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# ASUS ProArt P16 H7607BA touchpad (PixArt 093A:4F01 behind I2C-HID)
+# The pad reports pressure values of ~80-120 on a declared range of 0-65535. libinput detects
+# touches by a pressure threshold (~10 % of the range) and therefore never sees a finger.
+# Hide the pressure axes from libinput so touches are detected by contact tracking instead.
+[ASUS ProArt P16 H7607BA Touchpad]
+MatchBus=i2c
+MatchVendor=0x093A
+MatchProduct=0x4F01
+MatchUdevType=touchpad
+AttrEventCode=-ABS_MT_PRESSURE;-ABS_PRESSURE;

@@ -1,0 +1,90 @@
+Subject: [PATCH] HID: asus: expose the Fn-lock state in sysfs
+
+With QUIRK_HID_FN_LOCK the Fn-lock state lives only in the driver, so the
+desktop cannot show whether F1-F12 or the media keys are primary. Add a
+fn_lock attribute to the HID device (1: F1-F12 first, 0: media keys first),
+announce Fn+Esc changes with sysfs_notify() so userspace can poll() for them,
+and let root set the state by writing to it.
+---
+--- a/drivers/hid/hid-asus.c
++++ b/drivers/hid/hid-asus.c
+@@ -155,6 +155,7 @@
+ 	unsigned long battery_next_query;
+ 	struct work_struct fn_lock_sync_work;
+ 	bool fn_lock;
++	bool fn_lock_attr;
+ };
+ 
+ static int asus_report_battery(struct asus_drvdata *, u8 *, int);
+@@ -428,6 +429,8 @@
+ 			if (drvdata->quirks & QUIRK_HID_FN_LOCK) {
+ 				drvdata->fn_lock = !drvdata->fn_lock;
+ 				schedule_work(&drvdata->fn_lock_sync_work);
++				if (drvdata->fn_lock_attr)
++					sysfs_notify(&hdev->dev.kobj, NULL, "fn_lock");
+ 			}
+ 			break;
+ 		}
+@@ -670,6 +673,37 @@
+ 	asus_kbd_set_fn_lock(drvdata->hdev, drvdata->fn_lock);
+ }
+ 
++/*
++ * Expose the host-controlled Fn-lock state (1: F1-F12 first, 0: media keys
++ * first) so that the desktop can show it; Fn+Esc changes are announced with
++ * sysfs_notify(). Writing sets the state.
++ */
++static ssize_t fn_lock_show(struct device *dev, struct device_attribute *attr,
++			    char *buf)
++{
++	struct asus_drvdata *drvdata = hid_get_drvdata(to_hid_device(dev));
++
++	return sysfs_emit(buf, "%d\n", drvdata->fn_lock);
++}
++
++static ssize_t fn_lock_store(struct device *dev, struct device_attribute *attr,
++			     const char *buf, size_t count)
++{
++	struct asus_drvdata *drvdata = hid_get_drvdata(to_hid_device(dev));
++	bool value;
++	int ret;
++
++	ret = kstrtobool(buf, &value);
++	if (ret)
++		return ret;
++
++	drvdata->fn_lock = value;
++	schedule_work(&drvdata->fn_lock_sync_work);
++	sysfs_notify(&dev->kobj, NULL, "fn_lock");
++	return count;
++}
++static DEVICE_ATTR_RW(fn_lock);
++
+ static void asus_schedule_work(struct asus_kbd_leds *led)
+ {
+ 	unsigned long flags;
+@@ -1455,6 +1489,14 @@
+ 			if (ret)
+ 				goto err_stop_hw;
+ 		}
++
++		/* fn_lock_sync_work is set up in asus_input_configured() */
++		if (drvdata->quirks & QUIRK_HID_FN_LOCK) {
++			if (device_create_file(&hdev->dev, &dev_attr_fn_lock))
++				hid_warn(hdev, "Failed to create fn_lock attribute\n");
++			else
++				drvdata->fn_lock_attr = true;
++		}
+ 	}
+ 
+ 	return 0;
+@@ -1479,6 +1521,9 @@
+ 		cancel_work_sync(&drvdata->kbd_backlight->work);
+ 	}
+ 
++	if (drvdata->fn_lock_attr)
++		device_remove_file(&hdev->dev, &dev_attr_fn_lock);
++
+ 	if (drvdata->quirks & QUIRK_HID_FN_LOCK)
+ 		cancel_work_sync(&drvdata->fn_lock_sync_work);
+ 

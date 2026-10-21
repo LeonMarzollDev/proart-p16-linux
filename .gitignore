@@ -1,0 +1,16 @@
+# kernel module build output
+*.o
+*.ko
+*.ko.zst
+*.mod
+*.mod.c
+*.cmd
+.module-common.o
+Module.symvers
+modules.order
+.tmp_versions/
+# Python
+__pycache__/
+*.pyc
+# local diagnosis output
+*.log

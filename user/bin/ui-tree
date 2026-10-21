@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# Lists applications/windows and (optionally) their UI elements through AT-SPI.
+# Usage: ui-tree               -> apps + windows
+#        ui-tree <app> [depth] -> UI elements of the app (role, name)
+import sys
+import gi
+gi.require_version("Atspi", "2.0")
+from gi.repository import Atspi
+
+def walk(node, depth, maxdepth, indent=""):
+    try:
+        role, name = node.get_role_name(), node.get_name() or ""
+    except Exception:
+        return
+    if name or depth <= 1:
+        print(f"{indent}{role}: {name}"[:160])
+    if depth >= maxdepth:
+        return
+    for i in range(min(node.get_child_count(), 200)):
+        child = node.get_child_at_index(i)
+        if child:
+            walk(child, depth + 1, maxdepth, indent + "  ")
+
+desktop = Atspi.get_desktop(0)
+target = sys.argv[1].lower() if len(sys.argv) > 1 else None
+maxdepth = int(sys.argv[2]) if len(sys.argv) > 2 else 8
+for i in range(desktop.get_child_count()):
+    app = desktop.get_child_at_index(i)
+    if not app:
+        continue
+    name = app.get_name() or "?"
+    if target is None:
+        wins = [app.get_child_at_index(j).get_name() for j in range(app.get_child_count())]
+        print(f"{name}: {[w for w in wins if w]}")
+    elif target in name.lower():
+        walk(app, 0, maxdepth)

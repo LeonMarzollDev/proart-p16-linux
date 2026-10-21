@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# Screenshot through xdg-desktop-portal (GNOME/Wayland). Prints the path of the PNG file.
+# Usage: ui-screenshot [target.png]
+import os, shutil, sys, urllib.parse
+from gi.repository import Gio, GLib
+
+bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+loop = GLib.MainLoop()
+token = f"claude{os.getpid()}"
+sender = bus.get_unique_name()[1:].replace(".", "_")
+handle = f"/org/freedesktop/portal/desktop/request/{sender}/{token}"
+result = {}
+
+def on_response(conn, sender_name, path, iface, signal, params):
+    code, res = params.unpack()
+    result["code"] = code
+    result["uri"] = res.get("uri")
+    loop.quit()
+
+bus.signal_subscribe("org.freedesktop.portal.Desktop", "org.freedesktop.portal.Request",
+                     "Response", handle, None, Gio.DBusSignalFlags.NO_MATCH_RULE, on_response)
+bus.call_sync("org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
+              "org.freedesktop.portal.Screenshot", "Screenshot",
+              GLib.Variant("(sa{sv})", ("", {"handle_token": GLib.Variant("s", token),
+                                             "interactive": GLib.Variant("b", False)})),
+              None, Gio.DBusCallFlags.NONE, -1, None)
+GLib.timeout_add_seconds(60, loop.quit)
+loop.run()
+if result.get("code") != 0 or not result.get("uri"):
+    sys.exit(f"Screenshot failed or was denied (code={result.get('code')})")
+src = urllib.parse.unquote(urllib.parse.urlparse(result["uri"]).path)
+dst = sys.argv[1] if len(sys.argv) > 1 else src
+if dst != src:
+    shutil.move(src, dst)
+print(dst)
