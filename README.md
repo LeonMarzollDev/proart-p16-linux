@@ -1,9 +1,16 @@
-# Linux on the ASUS ProArt P16 H7607BA (NVIDIA N1X / RTX Spark)
+# ASUS ProArt P16 (H7607BA) Linux support - NVIDIA N1X / RTX Spark, Ubuntu 26.04
 
-Scripts, small kernel drivers and configuration that make Ubuntu 26.04 usable on the ASUS ProArt
-P16 H7607BA, an arm64 laptop with the NVIDIA N1X SoC. Everything here was worked out on one unit;
-see [docs/technical-notes.md](docs/technical-notes.md) for the why and
-[docs/hardware.md](docs/hardware.md) for the hardware map.
+Install scripts, small kernel drivers and configuration that make **Linux work on the ASUS ProArt
+P16 H7607BA**, the arm64 laptop with the **NVIDIA N1X ("RTX Spark") SoC** (Blackwell GPU, 20-core
+ARM CPU, MediaTek MT8901 platform blocks). With them, Ubuntu 26.04 gets a working battery
+indicator, speakers and microphone, keyboard, touchpad, touchscreen, keyboard backlight, Fn keys,
+suspend, GNOME power modes (ASUS fan modes), a battery charge limit, hardware sensors, haptic
+touchpad clicks and GPU acceleration, including for snap apps.
+
+Everything here was worked out on one unit; see [docs/technical-notes.md](docs/technical-notes.md)
+for the why and [docs/hardware.md](docs/hardware.md) for the hardware map. Other NVIDIA N1X/GB10
+machines share parts of the platform (FF-A EC service, MT8901 SoundWire audio, the snap EGL
+issue), so some fixes may help there too - reports welcome.
 
 > Status: community bring-up, not supported by ASUS or NVIDIA. Several steps use kernel packages from
 > Ubuntu's `-proposed` pocket and out-of-tree drivers. Keep a fallback kernel in the GRUB menu.
@@ -30,6 +37,25 @@ see [docs/technical-notes.md](docs/technical-notes.md) for the why and
   script only accepts the exact file it was tested with.
 - **Face login:** `optional/howdy-polkit.sh` lets admin dialogs accept your face by opening the
   polkit helper's sandbox for cameras. Read its header before using it.
+
+## Common problems this fixes
+
+| Symptom on Linux | Cause | Fix |
+|---|---|---|
+| Keyboard, touchpad and touchscreen do not work | generic kernel lacks the MT8901 I2C/GPIO drivers; firmware hides the power controller | [`install/01-kernel.sh`](install/01-kernel.sh) |
+| Battery always shows 0 %, AC adapter not detected | EC answers over FF-A never reach ACPI | [`drivers/proart-battery`](drivers/proart-battery) |
+| No sound card, no sound, quiet or muffled speakers | missing UCM profile and ASUS speaker tuning, tweeters off | [`install/03-audio.sh`](install/03-audio.sh), `user/install-user.sh` |
+| Touchpad detected but the pointer does not move | pressure range confuses libinput | [`install/06-touchpad.sh`](install/06-touchpad.sh) |
+| Touchpad clicks do not vibrate (haptic touchpad) | pad has no auto trigger | `proart-haptic.service` ([`install/06-touchpad.sh`](install/06-touchpad.sh)) |
+| Keyboard backlight keeps blinking or fading, F4 does nothing | keyboard stays in ASUS OOBE demo mode | [`drivers/hid-asus-proart`](drivers/hid-asus-proart) |
+| Fn keys / Fn-lock (Fn+Esc) do nothing | no asus-wmi on arm64 | [`drivers/hid-asus-proart`](drivers/hid-asus-proart) |
+| Laptop does not wake up from suspend | "deep" sleep instead of Modern Standby | s2idle in [`install/01-kernel.sh`](install/01-kernel.sh) (resume test pending) |
+| GNOME power modes do nothing, no Performance mode, fan always the same | ASUS fan modes only reachable through the EC | [`drivers/proart-battery`](drivers/proart-battery) |
+| No battery charge limit ("preserve battery health") | same | [`drivers/proart-battery`](drivers/proart-battery) |
+| Temperatures of 1000-6000 C, fan at 164613644 rpm | power meters exposed as thermal zones, broken EC path | [`drivers/proart-battery`](drivers/proart-battery) |
+| 4K YouTube stutters, video decoded on the CPU | Firefox snap without NVIDIA, VA-API not set up | [`install/07-video-firefox.sh`](install/07-video-firefox.sh) |
+| Snap apps (Snap Store, Chromium/Electron/Qt apps) slow, render with llvmpipe | snapd does not expose `libnvidia-rmapi-tegra` | [`install/09-snap-gpu.sh`](install/09-snap-gpu.sh) |
+| Higher idle power draw than Windows | firmware leaves PCIe ASPM off | [`install/10-power.sh`](install/10-power.sh) |
 
 ## Hardware status
 
