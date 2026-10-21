@@ -50,9 +50,10 @@ ls -l ./*.dat
 
 echo "== 5/5 Configuration: IR camera, dark threshold (the IR emitter strobes)"
 CFG=/usr/local/etc/howdy/config.ini
-# timeout 7 s and certainty 4.0 (Howdy scale: lower = stricter): with a single face model the default
-# 4 s / 3.5 timed out often; 4.0 is still strict with an IR camera. Add several models (see README).
-sed -i "s|^device_path = .*|device_path = $IRCAM|; s|^dark_threshold = .*|dark_threshold = 90|; s|^timeout = .*|timeout = 7|; s|^certainty = .*|certainty = 4.0|" "$CFG"
+# timeout 8 s and certainty 4.0 (Howdy scale: lower = stricter): with a single face model the default
+# 4 s / 3.5 timed out often - Howdy only tries once per unlock, often before you look at the screen;
+# 4.0 is still strict with an IR camera. Add several models (see README).
+sed -i "s|^device_path = .*|device_path = $IRCAM|; s|^dark_threshold = .*|dark_threshold = 90|; s|^timeout = .*|timeout = 8|; s|^certainty = .*|certainty = 4.0|" "$CFG"
 grep -E "^(device_path|dark_threshold|certainty|timeout)" "$CFG"
 
 echo

@@ -279,9 +279,10 @@ The IR camera works (alternating lit/dark frames from the strobing emitter, henc
   instead (security trade-off, revertible).
 - A face login cannot unlock the GNOME login keyring (it is encrypted with the password).
 - With one face model and the defaults (timeout 4 s, certainty 3.5) Howdy timed out often (the lit IR
-  frames were usable: ~63 % dark pixels, below `dark_threshold`). `optional/howdy.sh` sets 7 s and 4.0;
-  enrolling 3-4 models (head angle, light, glasses) helps most. Howdy runs once per authentication:
-  after a timeout the lock screen waits for the password until `Esc` starts a new attempt.
+  frames were usable: ~63 % dark pixels, below `dark_threshold`). `optional/howdy.sh` sets 8 s and 4.0;
+  enrolling 3-4 models (head angle, light, glasses) helps most. Howdy runs once per authentication,
+  starting when the lock screen wakes: after a timeout the lock screen only waits for the password.
+  Pressing Enter on the empty password field fails that attempt and starts a new one with Howdy.
 
 ## 9. Not solved
 
