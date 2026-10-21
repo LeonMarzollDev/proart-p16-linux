@@ -15,10 +15,18 @@ echo "  kernel $(uname -r), $(uptime -p)"
 check "kernel parameter acpi_osi=\"!Windows 2022\"" 'grep -q "acpi_osi=!Windows 2022" /proc/cmdline'
 failed=$(systemctl --failed --no-legend --plain | awk '{print $1}' | tr '\n' ' ')
 [ -z "$failed" ] && OK "no failed system units" || FAIL "failed units: $failed"
-check "suspend mode s2idle" 'grep -q "\[s2idle\]" /sys/power/mem_sleep'
+# systemd switches /sys/power/mem_sleep to s2idle only when it suspends
+check "suspend mode s2idle" 'grep -q "\[s2idle\]" /sys/power/mem_sleep || systemd-analyze cat-config systemd/sleep.conf | grep -q "^MemorySleepMode=s2idle"'
 
 echo "== Battery, EC, power modes"
 check "proart_battery loaded ($(dkms status proart-battery 2>/dev/null | grep -o "proart-battery/[0-9.]*" | head -1))" 'test -d /sys/module/proart_battery'
+# an initramfs built before the last DKMS install loads an older copy at boot
+for m in proart_battery proart_audio hid_asus; do
+	[ -r /sys/module/$m/srcversion ] || continue
+	[ "$(cat /sys/module/$m/srcversion)" = "$(modinfo -F srcversion $m 2>/dev/null)" ] &&
+		OK "$m: running version = installed version" ||
+		FAIL "$m: an older copy is running (initramfs not updated? sudo update-initramfs -u)"
+done
 B=/sys/class/power_supply/BAT1
 [ -r $B/capacity ] && OK "battery $(cat $B/capacity) %, $(cat $B/status), $(( $(cat $B/power_now 2>/dev/null || echo 0) / 1000000 )) W, charge limit $(cat $B/charge_control_end_threshold 2>/dev/null || echo -) %" || FAIL "battery BAT1 missing"
 check "AC adapter ADP1 ($(cat /sys/class/power_supply/ADP1/online 2>/dev/null | sed 's/1/online/;s/0/offline/'))" 'test -r /sys/class/power_supply/ADP1/online'

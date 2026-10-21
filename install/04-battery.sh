@@ -35,6 +35,8 @@ dkms add "proart-battery/$VER"
 dkms build "proart-battery/$VER" -k "$KREL"
 dkms install "proart-battery/$VER" -k "$KREL"
 echo proart_battery > /etc/modules-load.d/proart-battery.conf
+# the initramfs loads the module at boot; without this it keeps the previous version
+update-initramfs -u -k "$KREL"
 
 echo "== 3/4 udev rule for UPower's charge limit"
 install -m 644 "$REPO/config/udev/61-proart-battery.rules" /etc/udev/rules.d/
