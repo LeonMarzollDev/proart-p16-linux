@@ -279,6 +279,23 @@ bridge also provides `org.mobian_project.CallAudio` and mutes the microphone str
 sends to the phone. A Xiaomi 15T negotiated LC3-SWB first and fell back to CVSD (narrowband);
 WirePlumber links the call streams to the default output (the 2-way speakers) and microphone.
 
+## 5d. Package updates
+
+Some parts of the setup sit next to package files. `install/11-protect.sh` keeps them:
+
+- The UCM profile is in alsa-ucm-conf's directory, but no package ships it yet (alsa-ucm-conf PR #862).
+  Once one does, dpkg would overwrite the local changes, and the woofers would stay silent because their
+  port is hidden (4.1). Local `dpkg-divert`s make dpkg put the package's copies next to ours as
+  `*.distrib`; `tools/check.sh` reports when that happens.
+- The packages the setup needs (e.g. `lsp-plugins-lv2` for the crossover's limiters) are marked as
+  manually installed, so `apt autoremove` keeps them.
+- An apt hook (`/etc/apt/apt.conf.d/80-proart-p16` → `config/apt/proart-after-apt`) runs after every
+  package change. It rebuilds each user's WirePlumber mute fix (user/install-user.sh) from the new
+  `state-stream.lua`, or removes it once the fix no longer applies, so a WirePlumber update never runs
+  next to a stale copy. It also builds missing ProArt DKMS modules for every installed kernel. The
+  `linux-nvidia-hwe` meta package pulls in newer kernel flavours that the install scripts did not build
+  for; GRUB stays on the saved entry from install/01-kernel.sh.
+
 ## 6. Touchpad
 
 The touchpad delivered ~120 reports/s with positions, pressure and even `BTN_LEFT` on firm presses,

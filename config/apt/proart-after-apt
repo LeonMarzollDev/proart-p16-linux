@@ -1,0 +1,56 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# ASUS ProArt P16 H7607BA: runs after every package change (apt hook /etc/apt/apt.conf.d/80-proart-p16,
+# installed by install/11-protect.sh). Keeps the parts of this setup that live next to package files.
+# Log: journalctl -t proart-after-apt
+LOG="logger -t proart-after-apt"
+
+# 1. WirePlumber mute fix (user/install-user.sh): each user's copy of state-stream.lua is the system
+#    file plus a 2-line fix. After a WirePlumber update the copy would be an old script on a new
+#    WirePlumber: rebuild it from the new file, or remove it when the fix no longer applies (fixed
+#    upstream or rewritten), so WirePlumber falls back to its own script.
+SYS=/usr/share/wireplumber/scripts/node/state-stream.lua
+for home in /home/*; do
+	USR="$home/.local/share/wireplumber/scripts/node/state-stream.lua"
+	[ -f "$USR" ] && [ -f "$SYS" ] || continue
+	new=$(sed -e 's/if props\.volume ~= stored_values\.volume then/if props.volume ~= nil and props.volume ~= stored_values.volume then/' \
+		-e 's/if props\.mute ~= stored_values\.mute then/if props.mute ~= nil and props.mute ~= stored_values.mute then/' "$SYS")
+	[ "$new" = "$(cat "$USR")" ] && continue
+	if [ "$(grep -c '~= nil and props\.\(volume\|mute\) ~= stored_values' <<< "$new")" = 2 ]; then
+		printf '%s\n' "$new" > "$USR"
+		$LOG "WirePlumber was updated: renewed the mute fix in $USR (active at the next login)"
+	else
+		rm -f "$USR"
+		$LOG "WirePlumber was updated and the mute fix no longer applies: removed $USR"
+	fi
+done
+
+# 2. DKMS: the ProArt modules for every installed kernel with headers. The kernel's own hook builds
+#    them for new kernels; this catches kernels installed before the modules and failed builds
+#    (retried once per kernel and module version).
+STAMP=/var/lib/proart-p16
+mkdir -p "$STAMP"
+for src in /usr/src/proart-battery-* /usr/src/proart-audio-* /usr/src/hid-asus-proart-*; do
+	[ -f "$src/dkms.conf" ] || continue
+	m=$(sed -n 's/^PACKAGE_NAME="\(.*\)"/\1/p' "$src/dkms.conf")
+	v=$(sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' "$src/dkms.conf")
+	for k in $(ls /lib/modules); do
+		[ -d "/lib/modules/$k/build" ] || continue
+		dkms status -m "$m" -v "$v" -k "$k" 2>/dev/null | grep -q installed && continue
+		[ -e "$STAMP/dkms-$m-$v-$k" ] && continue
+		touch "$STAMP/dkms-$m-$v-$k"
+		if dkms install -m "$m" -v "$v" -k "$k" >/dev/null 2>&1; then
+			# the initramfs loads proart_battery/proart_audio early: rebuild it with the new module
+			update-initramfs -u -k "$k" >/dev/null 2>&1
+			$LOG "built $m $v for $k"
+		else
+			$LOG "could not build $m $v for $k (dkms install -m $m -v $v -k $k)"
+		fi
+	done
+done
+
+# 3. UCM profile: diverted by install/11-protect.sh. Once alsa-ucm-conf ships it, the package's
+#    copies land next to ours as *.distrib.
+ls /usr/share/alsa/ucm2/MediaTek/mt8901-soundwir/*.distrib >/dev/null 2>&1 &&
+	$LOG "alsa-ucm-conf now ships the mt8901-soundwir UCM profile (*.distrib); the ProArt copy stays active"
+exit 0

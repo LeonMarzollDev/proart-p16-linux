@@ -103,6 +103,16 @@ echo "== Power saving"
 # powersupersave (L1.2) made sleeps of more than a few minutes hang on resume
 check "PCIe ASPM policy not powersupersave (long sleeps would hang)" '! grep -q "\[powersupersave\]" /sys/module/pcie_aspm/parameters/policy'
 
+echo "== Updates"
+# install/11-protect.sh
+check "UCM profile protected against alsa-ucm-conf updates (install/11-protect.sh)" 'dpkg-divert --list "*mt8901-soundwir*" | grep -q mt8901' WARN
+check "apt hook keeps the setup across package updates (install/11-protect.sh)" 'test -x /usr/local/sbin/proart-after-apt -a -f /etc/apt/apt.conf.d/80-proart-p16' WARN
+ls /usr/share/alsa/ucm2/MediaTek/mt8901-soundwir/*.distrib >/dev/null 2>&1 &&
+	WARN "alsa-ucm-conf now ships its own mt8901-soundwir profile (*.distrib next to the ProArt copy): compare them"
+nomod=$(for k in $(ls /lib/modules); do [ -d /lib/modules/$k/build ] || continue
+	dkms status proart-battery -k "$k" 2>/dev/null | grep -q installed || echo "$k"; done | tr '\n' ' ')
+[ -z "$nomod" ] && OK "ProArt modules built for every installed kernel" || WARN "no ProArt modules for kernel(s) $nomod (install/11-protect.sh builds them)"
+
 echo "== Network"
 check "Wi-Fi connected" 'nmcli -t -f TYPE,STATE dev | grep -q "^wifi:connected"' WARN
 check "Bluetooth controller" 'test -n "$(ls /sys/class/bluetooth 2>/dev/null)"' WARN

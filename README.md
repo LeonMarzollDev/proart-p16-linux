@@ -114,6 +114,7 @@ sudo bash install/07-video-firefox.sh # Firefox from Mozilla's APT repo, GPU vid
 sudo bash install/08-camera.sh        # webcam anti-flicker 50 Hz (skip on 60 Hz mains)
 sudo bash install/09-snap-gpu.sh      # NVIDIA EGL for snap apps (otherwise they render on the CPU)
 sudo bash install/10-power.sh         # only for earlier installs: removes the PCIe ASPM setting
+sudo bash install/11-protect.sh       # keeps the setup across Ubuntu updates (UCM diversion, apt hook)
 sudo reboot
 user/install-user.sh                  # as your user: speaker crossover, tweeter service, names, VA-API env,
                                       #   Fn-lock top-bar indicator
