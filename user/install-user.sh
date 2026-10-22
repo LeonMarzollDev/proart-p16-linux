@@ -4,7 +4,7 @@
 #  - ~/.local/bin: proart-eq (tone control), proart-tweeter (tweeter routing + headphone jack),
 #                  pw-id (PipeWire node id helper), proart-fnlock (Fn-lock top-bar indicator),
 #                  ui-screenshot / ui-tree (optional desktop helpers)
-#  - PipeWire 2-way crossover "ProArt P16 Speakers", WirePlumber device names
+#  - PipeWire 2-way crossover "ProArt P16 Speakers", WirePlumber device names, mute kept across reboots
 #  - environment for NVIDIA VA-API video decoding
 #  - systemd user service proart-tweeter, autostart entry for proart-fnlock
 # Requires install/03-audio.sh (and install/05-keyboard.sh for the Fn-lock indicator) to have been run first.
@@ -20,6 +20,13 @@ ENVD="$HOME/.config/environment.d"
 UNIT="$HOME/.config/systemd/user"
 AUTOSTART="$HOME/.config/autostart"
 TOOLS="proart-eq proart-tweeter proart-fnlock pw-id ui-screenshot ui-tree easyeffects-start"
+# WirePlumber 0.5 forgets the mute of filter sinks such as "ProArt P16 Speakers" (muted before a
+# reboot = unmuted after it): they have a second Props object (the filter's controls) without
+# volume/mute, which overwrites the stored values with nil. A copy of its state-stream.lua with that
+# check fixed goes to the user's data dir, which WirePlumber prefers over /usr/share.
+# Run this script again after WirePlumber updates (tools/check.sh tells when).
+WPS_SYS=/usr/share/wireplumber/scripts/node/state-stream.lua
+WPS="$HOME/.local/share/wireplumber/scripts/node/state-stream.lua"
 
 restart_audio() {
 	systemctl --user restart pipewire pipewire-pulse wireplumber
@@ -32,7 +39,7 @@ if [ "${1:-}" = "--remove" ]; then
 	pkill -f "$BIN/proart-fnlock" 2>/dev/null || true
 	rm -f "$AUTOSTART/proart-fnlock.desktop"
 	for t in $TOOLS; do rm -f "$BIN/$t"; done
-	rm -f "$PW/60-proart-2way.conf" "$WP/51-proart-names.conf" "$ENVD/90-nvidia-vaapi.conf" "$UNIT/proart-tweeter.service"
+	rm -f "$PW/60-proart-2way.conf" "$WP/51-proart-names.conf" "$ENVD/90-nvidia-vaapi.conf" "$UNIT/proart-tweeter.service" "$WPS"
 	systemctl --user daemon-reload
 	restart_audio
 	echo "Done (log out and back in to drop the VA-API environment)."
@@ -48,6 +55,19 @@ install -d "$PW" "$WP" "$ENVD"
 install -m 644 "$REPO/config/pipewire/60-proart-2way.conf" "$PW/"
 install -m 644 "$REPO/config/wireplumber/51-proart-names.conf" "$WP/"
 install -m 644 "$REPO/config/environment.d/90-nvidia-vaapi.conf" "$ENVD/"
+if [ -f "$WPS_SYS" ]; then
+	install -d "$(dirname "$WPS")"
+	sed -e 's/if props\.volume ~= stored_values\.volume then/if props.volume ~= nil and props.volume ~= stored_values.volume then/' \
+	    -e 's/if props\.mute ~= stored_values\.mute then/if props.mute ~= nil and props.mute ~= stored_values.mute then/' \
+	    "$WPS_SYS" > "$WPS.new"
+	if [ "$(grep -c '~= nil and props\.\(volume\|mute\) ~= stored_values' "$WPS.new")" = 2 ]; then
+		mv "$WPS.new" "$WPS"
+		echo "WirePlumber: mute of the speakers is kept across reboots"
+	else
+		rm -f "$WPS.new" "$WPS"
+		echo "WirePlumber's state-stream.lua has changed - mute fix not applied (maybe fixed upstream)"
+	fi
+fi
 
 echo "== 3/5 systemd user service proart-tweeter"
 install -d "$UNIT"

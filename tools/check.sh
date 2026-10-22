@@ -27,6 +27,20 @@ for m in proart_battery proart_audio hid_asus; do
 		OK "$m: running version = installed version" ||
 		FAIL "$m: an older copy is running (initramfs not updated? sudo update-initramfs -u)"
 done
+# a DKMS build of the same version number from older sources would pass the check above
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+for d in proart-battery proart-audio hid-asus-proart; do
+	ver=$(sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' "$REPO/drivers/$d/dkms.conf" 2>/dev/null)
+	[ -n "$ver" ] || continue
+	if [ ! -d "/usr/src/$d-$ver" ]; then
+		FAIL "$d $ver from this repo is not installed (installed: $(ls -d /usr/src/$d-* 2>/dev/null | xargs -r -n1 basename | tr '\n' ' '))"
+	elif diff -q <(cat "$REPO/drivers/$d"/*.c) <(cat "/usr/src/$d-$ver"/*.c) >/dev/null; then
+		OK "$d $ver: installed source = repo"
+	else
+		FAIL "$d $ver: installed source differs from the repo (run its install script again)"
+	fi
+done
+check "EC standby notifications off (they cut the audio codecs' power)" '[ "$(cat /sys/module/proart_battery/parameters/standby_notify)" = N ]'
 B=/sys/class/power_supply/BAT1
 [ -r $B/capacity ] && OK "battery $(cat $B/capacity) %, $(cat $B/status), $(( $(cat $B/power_now 2>/dev/null || echo 0) / 1000000 )) W, charge limit $(cat $B/charge_control_end_threshold 2>/dev/null || echo -) %" || FAIL "battery BAT1 missing"
 check "AC adapter ADP1 ($(cat /sys/class/power_supply/ADP1/online 2>/dev/null | sed 's/1/online/;s/0/offline/'))" 'test -r /sys/class/power_supply/ADP1/online'
@@ -50,6 +64,17 @@ check "speaker tuning loaded (cs35l56 firmware UID 10431484)" 'kmsg | grep -q "p
 check "speaker DSP firmware running" 'kmsg | grep -q "cs35l56.*DSP1: Firmware:"'
 check "speaker sink proart_speakers" 'pw-cli ls Node | grep -q "node.name = \"proart_speakers\""'
 check "tweeter service" 'systemctl --user is-active proart-tweeter'
+# user/install-user.sh puts a fixed copy of WirePlumber's state-stream.lua in the user's data dir
+WPS=~/.local/share/wireplumber/scripts/node/state-stream.lua
+if [ ! -f $WPS ]; then
+	WARN "speaker mute is not kept across reboots (run user/install-user.sh)"
+elif diff -q <(sed -e 's/if props\.volume ~= stored_values\.volume then/if props.volume ~= nil and props.volume ~= stored_values.volume then/' \
+	-e 's/if props\.mute ~= stored_values\.mute then/if props.mute ~= nil and props.mute ~= stored_values.mute then/' \
+	/usr/share/wireplumber/scripts/node/state-stream.lua) $WPS >/dev/null; then
+	OK "speaker mute is kept across reboots (WirePlumber fix)"
+else
+	WARN "WirePlumber was updated: run user/install-user.sh again (mute fix is outdated)"
+fi
 
 echo "== Keyboard, touchpad"
 check "patched hid-asus with Fn-lock attribute" 'ls /sys/bus/hid/devices/*0B05:4B42*/fn_lock'
@@ -63,20 +88,18 @@ check "snap EGL shim" 'test -f /usr/share/glvnd/egl_vendor.d/09_nvidia_snap.json
 check "VA-API environment" 'test -f ~/.config/environment.d/90-nvidia-vaapi.conf' WARN
 
 echo "== Power saving"
-check "PCIe ASPM policy powersupersave" 'grep -q "\[powersupersave\]" /sys/module/pcie_aspm/parameters/policy'
-for d in /sys/bus/pci/devices/*; do
-	[ -f $d/link/l1_aspm ] || continue
-	drv=$(basename "$(readlink -f $d/driver)")
-	[ "$(cat $d/link/l1_aspm)" = 1 ] && OK "ASPM L1 on $drv" || WARN "ASPM L1 off on $drv"
-done
+# powersupersave (L1.2) made sleeps of more than a few minutes hang on resume
+check "PCIe ASPM policy not powersupersave (long sleeps would hang)" '! grep -q "\[powersupersave\]" /sys/module/pcie_aspm/parameters/policy'
 
 echo "== Network"
 check "Wi-Fi connected" 'nmcli -t -f TYPE,STATE dev | grep -q "^wifi:connected"' WARN
 check "Bluetooth controller" 'test -n "$(ls /sys/class/bluetooth 2>/dev/null)"' WARN
 
 echo "== Kernel log"
-n=$(journalctl -k -b -p 3 --no-pager -o cat 2>/dev/null | wc -l)
-[ "$n" -lt 20 ] && OK "$n kernel errors since boot" || WARN "$n kernel errors since boot (journalctl -k -b -p 3)"
+# messages every boot of this firmware/kernel prints; they do not indicate a problem
+known='of_root node is NULL|Illegal GSI2 translation|mtk_pwrap .*Not find device config data|No MSC devices found|device returned incorrect report|NVM\._STA|region initialization: \[PCI_Config\]|driver name too long|no backend DAIs enabled for DL2_FE|^$'
+n=$(journalctl -k -b -p 3 --no-pager -o cat 2>/dev/null | grep -cvE "$known")
+[ "$n" -lt 5 ] && OK "$n unexpected kernel errors since boot" || WARN "$n unexpected kernel errors since boot (journalctl -k -b -p 3)"
 
 echo
 echo "Result: $ok OK, $warn WARN, $fail FAIL"

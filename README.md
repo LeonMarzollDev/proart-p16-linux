@@ -50,13 +50,13 @@ issue), so some fixes may help there too - reports welcome.
 | Keyboard backlight keeps blinking or fading, F4 does nothing | keyboard stays in ASUS OOBE demo mode | [`drivers/hid-asus-proart`](drivers/hid-asus-proart) |
 | Fn keys / Fn-lock (Fn+Esc) do nothing | no asus-wmi on arm64 | [`drivers/hid-asus-proart`](drivers/hid-asus-proart) |
 | After shutting down, the power button only works with the charger plugged in | PSCI power-off makes the EC cut the battery | [`drivers/proart-battery`](drivers/proart-battery) (powers off via UEFI) |
-| Laptop does not wake up from suspend | "deep" sleep instead of Modern Standby | s2idle in [`install/01-kernel.sh`](install/01-kernel.sh) (resume test pending) |
+| Laptop does not wake up from suspend | "deep" sleep instead of Modern Standby; PCIe ASPM L1.2 | s2idle in [`install/01-kernel.sh`](install/01-kernel.sh), ASPM left at `default` |
 | GNOME power modes do nothing, no Performance mode, fan always the same | ASUS fan modes only reachable through the EC | [`drivers/proart-battery`](drivers/proart-battery) |
 | No battery charge limit ("preserve battery health") | same | [`drivers/proart-battery`](drivers/proart-battery) |
 | Temperatures of 1000-6000 C, fan at 164613644 rpm | power meters exposed as thermal zones, broken EC path | [`drivers/proart-battery`](drivers/proart-battery) |
 | 4K YouTube stutters, video decoded on the CPU | Firefox snap without NVIDIA, VA-API not set up | [`install/07-video-firefox.sh`](install/07-video-firefox.sh) |
 | Snap apps (Snap Store, Chromium/Electron/Qt apps) slow, render with llvmpipe | snapd does not expose `libnvidia-rmapi-tegra` | [`install/09-snap-gpu.sh`](install/09-snap-gpu.sh) |
-| Higher idle power draw than Windows | firmware leaves PCIe ASPM off | [`install/10-power.sh`](install/10-power.sh) |
+| Speakers muted before a reboot are unmuted after it | WirePlumber 0.5 drops the mute of filter sinks (the 2-way crossover) | [`user/install-user.sh`](user/install-user.sh) |
 | GNOME Calls shows "no modem" for a Bluetooth phone, mute does nothing | PipeWire's oFono emulation is incomplete, callaudiod expects a phone | [`optional/phone-handsfree.sh`](optional/phone-handsfree.sh) |
 
 ## Hardware status
@@ -79,6 +79,7 @@ issue), so some fixes may help there too - reports welcome.
 | Phone calls via a paired phone | - | GNOME Calls rings, answers, dials; call audio on the laptop; mute button (`optional/phone-handsfree.sh`) |
 | Webcam, IR camera | works | works; 50 Hz anti-flicker; optional face login (Howdy: login, lock screen, sudo, optionally admin dialogs) |
 | USB-C, second M.2 slot | works / slot empty | unchanged (second slot: 2280, single-sided SSDs only per ASUS) |
+| Suspend (s2idle) | "deep" sleep never wakes up | wakes up reliably; **open:** after sleeps of more than a few minutes the internal mic stays silent and the speakers crackle until a reboot (audio state the firmware sets at boot is lost; under investigation), and the fans keep running while asleep |
 | Haptic touchpad feedback | no vibration on click | click felt on press and release (`proart-haptic.service`, strength adjustable) |
 | Battery through ACPI | - | **not working**: the EC echoes the ACPI requests; `proart_battery` is the workaround |
 | Dolby Atmos | - | **not available** on Linux; EasyEffects presets as an approximation |
@@ -109,7 +110,7 @@ sudo bash install/06-touchpad.sh      # libinput quirk
 sudo bash install/07-video-firefox.sh # nvidia-vaapi-driver, Firefox from Mozilla's APT repo
 sudo bash install/08-camera.sh        # webcam anti-flicker 50 Hz (skip on 60 Hz mains)
 sudo bash install/09-snap-gpu.sh      # NVIDIA EGL for snap apps (otherwise they render on the CPU)
-sudo bash install/10-power.sh         # PCIe ASPM for SSD, Wi-Fi, SD reader (firmware leaves it off)
+sudo bash install/10-power.sh         # only for earlier installs: removes the PCIe ASPM setting
 sudo reboot
 user/install-user.sh                  # as your user: speaker crossover, tweeter service, names, VA-API env,
                                       #   Fn-lock top-bar indicator

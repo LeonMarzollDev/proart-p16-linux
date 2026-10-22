@@ -209,11 +209,15 @@ inside snaps still fail). The proper fix is adding `libnvidia-rmapi-tegra.so*` t
 - PCIe ASPM: the firmware leaves L1 and the L1 substates off on every link (SSD, Wi-Fi, SD reader)
   although `_OSC` hands PCIe control to the OS. Linux' `default` ASPM policy keeps the firmware
   setting, and the per-device `link/l1_aspm` switches have no effect under that policy.
-  `install/10-power.sh` sets `powersupersave` at boot (tmpfiles.d). No AER/link errors under a 2 GB
-  direct read, a full Timeshift snapshot and Wi-Fi traffic. Under ~28 W of desktop load the
-  difference was within the measurement noise; the gain is for idle and sleep.
+  `powersupersave` (L1 + L1.1/L1.2) ran without AER/link errors under a 2 GB direct read, a full
+  Timeshift snapshot and Wi-Fi traffic, and under ~28 W of desktop load the difference was within
+  the measurement noise. But with it, s2idle sleeps of more than a few minutes did not wake up
+  (the log ends at `PM: suspend entry`; with ASPM on, the nvme driver keeps the SSD in D0 with
+  APST + L1.2 over suspend instead of shutting it down). With the `default` policy long sleeps wake
+  up, so the policy stays at `default`; `install/10-power.sh` removes the setting of earlier
+  versions.
 - The SD reader (GL9767, `sdhci-pci`) cannot runtime-suspend: sdhci-pci only allows it with a
-  card-detect GPIO, so it stays in D0 (with ASPM L1.2 on its link).
+  card-detect GPIO, so it stays in D0.
 - Display: 3840x2400 at 120 Hz runs in mutter's variable refresh mode (30-120 Hz) already.
 - CPU: EAS is active (`sched_energy_aware=1`, capacities 699 / 998 / 1024), cpuidle uses the
   LPI WFI and core-off states, USB devices runtime-suspend, PipeWire suspends the codecs when idle.
