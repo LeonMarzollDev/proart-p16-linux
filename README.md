@@ -54,7 +54,7 @@ issue), so some fixes may help there too - reports welcome.
 | GNOME power modes do nothing, no Performance mode, fan always the same | ASUS fan modes only reachable through the EC | [`drivers/proart-battery`](drivers/proart-battery) |
 | No battery charge limit ("preserve battery health") | same | [`drivers/proart-battery`](drivers/proart-battery) |
 | Temperatures of 1000-6000 C, fan at 164613644 rpm | power meters exposed as thermal zones, broken EC path | [`drivers/proart-battery`](drivers/proart-battery) |
-| 4K YouTube stutters, video decoded on the CPU | Firefox snap without NVIDIA, VA-API not set up | [`install/07-video-firefox.sh`](install/07-video-firefox.sh) |
+| 4K YouTube stutters, video decoded on the CPU | Firefox snap without NVIDIA; Firefox blocklists NVIDIA decoding; VA-API cannot export frames on the N1X | [`install/07-video-firefox.sh`](install/07-video-firefox.sh) (Vulkan video decoding) |
 | Snap apps (Snap Store, Chromium/Electron/Qt apps) slow, render with llvmpipe | snapd does not expose `libnvidia-rmapi-tegra` | [`install/09-snap-gpu.sh`](install/09-snap-gpu.sh) |
 | Dragging windows/files stutters at 120-180 Hz or with several monitors, GPU idle | GNOME Shell runs on the efficiency cores at ~340 MHz (energy-aware scheduling) | [`user/install-user.sh`](user/install-user.sh) (uclamp drop-in) |
 | All sound stops when the internal microphone stalls (e.g. while an echo canceller records) | the mic has a higher clock-driver priority than the speakers | [`config/wireplumber/51-proart-names.conf`](config/wireplumber/51-proart-names.conf) |
@@ -69,7 +69,7 @@ issue), so some fixes may help there too - reports welcome.
 | Keyboard backlight | blinks constantly (OOBE demo mode), no control | steady (OOBE off); F4 cycles off/1/2/3 with the GNOME level OSD; slider in the status menu (patched hid-asus, verified) |
 | Fn keys / Fn-lock | Fn-lock (Fn+Esc) does nothing | media keys first, Fn+Esc switches; state shown in the top bar and as a notification (`proart-fnlock`) |
 | Display (3840x2400 OLED) | framebuffer only, 60 Hz, no acceleration | NVIDIA 615, 120 Hz |
-| GPU video decoding | - | NVDEC via VA-API works (vainfo: AV1/VP9/HEVC/H.264); Firefox playback with all prefs not yet verified |
+| GPU video decoding | - | Firefox decodes AV1/VP9/H.264/HEVC on NVDEC through Vulkan video: YouTube 2160p60 with the decoder process at 20-30 % CPU instead of 260-700 %; VA-API decodes but cannot export frames |
 | Speakers | no sound card | 2-way speakers: ASUS woofer tuning, tweeters enabled, time-aligned crossover, tone control |
 | Headphone jack, internal mic, headset mic | no sound card | works (NVIDIA UCM profile); tweeters mute when headphones are plugged in |
 | Battery / AC adapter | 0 % / not detected | works (`proart_battery`): level, charging/discharging, power draw and time remaining (verified) |
@@ -109,14 +109,13 @@ sudo bash install/03-audio.sh         # UCM profile, ASUS speaker tuning, proart
 sudo bash install/04-battery.sh       # proart_battery: battery, fan modes, charge limit
 sudo bash install/05-keyboard.sh      # patched hid-asus (backlight levels + OSD, Fn-lock, no blinking)
 sudo bash install/06-touchpad.sh      # libinput quirk
-sudo bash install/07-video-firefox.sh # nvidia-vaapi-driver, Firefox from Mozilla's APT repo
+sudo bash install/07-video-firefox.sh # Firefox from Mozilla's APT repo, GPU video decoding for all profiles
 sudo bash install/08-camera.sh        # webcam anti-flicker 50 Hz (skip on 60 Hz mains)
 sudo bash install/09-snap-gpu.sh      # NVIDIA EGL for snap apps (otherwise they render on the CPU)
 sudo bash install/10-power.sh         # only for earlier installs: removes the PCIe ASPM setting
 sudo reboot
 user/install-user.sh                  # as your user: speaker crossover, tweeter service, names, VA-API env,
                                       #   Fn-lock top-bar indicator
-user/firefox-vaapi.sh ~/.mozilla/firefox/<profile>   # as your user, Firefox closed
 ```
 
 Then log out and back in once. `bash tools/check.sh` checks every component (OK / WARN / FAIL). Tone control for the speakers:

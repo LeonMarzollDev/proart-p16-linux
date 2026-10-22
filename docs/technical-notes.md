@@ -165,20 +165,31 @@ mutes the tweeter amp and makes "ProArt P16 Headphones" the default sink, on rem
 - The CS42L43 `Speaker Digital Volume` applies live; it compressed at +12 dB because the test
   signal plus shelf exceeded 0 dBFS.
 
-## 5. Video: Firefox snap cannot use NVIDIA
+## 5. Video: hardware decoding in Firefox
 
-4K YouTube stuttered: Firefox's RDD process used 300-540 % CPU, the GPU decoder 0 %. The Ubuntu
-Firefox snap gets its graphics stack from the `mesa-2404` content snap. Mozilla's arm64 `.deb`
-uses the system libraries. Requirements found:
+4K YouTube stuttered: Firefox's RDD process used 300-700 % CPU, the GPU decoder 0 %.
 
-- `nvidia-vaapi-driver` (vainfo: AV1, VP9 incl. profile 2, HEVC Main/10/12, H.264)
-- environment: `LIBVA_DRIVER_NAME=nvidia`, `NVD_BACKEND=direct`, `MOZ_DISABLE_RDD_SANDBOX=1`
-- prefs: `media.hardware-video-decoding.force-enabled`, `media.ffmpeg.vaapi.enabled`,
-  `widget.dmabuf.force-enabled` (all `true`). With only the first one, Firefox loaded
-  `nvidia_drv_video.so` but still decoded in software (dav1d).
+- The Ubuntu Firefox snap gets its graphics stack from the `mesa-2404` content snap and cannot
+  use the NVIDIA driver at all. Mozilla's arm64 `.deb` uses the system libraries.
+- Firefox 158 blocklists hardware video decoding for every NVIDIA GPU on Linux
+  (`FEATURE_HARDWARE_VIDEO_DECODING_NO_LINUX_NVIDIA`). `media.hardware-video-decoding.force-enabled`
+  overrides that (a user force-enable ranks above the blocklist in `FeatureState::GetValue`);
+  `gfx.blocklist.all = -1` does not, it is ignored in release builds.
+- VA-API: `nvidia-vaapi-driver` 0.0.14 decodes on the N1X (vainfo: AV1, VP9 incl. profile 2,
+  HEVC Main/10/12, H.264), but cannot export the decoded surfaces (`direct_realiseSurface: Unable
+  to realise surface`; `vaExportSurfaceHandle` fails with `NVD_BACKEND=direct` and `egl`).
+  Firefox's VA-API path needs the export and falls back to dav1d/libvpx after the first frame.
+- Vulkan video decoding works: Firefox picks the "NVIDIA RTX Spark N1X" Vulkan device, NVDEC
+  decodes and the frames go to the compositor as DMA-BUF. Release builds block it for all GPUs
+  (`FEATURE_VIDEO_DECODING_VULKAN_DISABLED`, allowed only in Nightly for NVIDIA >= 580.76.5);
+  `media.hardware-video-decoding-vulkan.force-enabled` lifts that. Measured with 4K test clips:
+  AV1 NVDEC 3-4 %, VP9 8-9 %, H.264 6 %, RDD process 0-10 % CPU, no software fallback.
+  YouTube 2160p60 (VP9/AV1): NVDEC 11-19 %, RDD process 20-30 % CPU instead of 260-700 %.
+- `install/07-video-firefox.sh` puts these prefs into `/usr/lib/firefox/defaults/pref/`, so
+  they apply to every profile (`config/firefox/proart-nvidia.js`). The environment
+  (`MOZ_DISABLE_RDD_SANDBOX=1` for `/dev/nvidia*`, `LIBVA_DRIVER_NAME`, `NVD_BACKEND`) comes from
+  `user/install-user.sh`.
 - Make sure the dock/default browser points to `firefox.desktop`, not `firefox_firefox.desktop` (snap).
-
-Status: the full set of prefs was not yet re-measured at the time of writing.
 
 ### Snap apps render on the CPU
 
