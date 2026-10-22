@@ -39,7 +39,8 @@ if [ "${1:-}" = "--remove" ]; then
 	pkill -f "$BIN/proart-fnlock" 2>/dev/null || true
 	rm -f "$AUTOSTART/proart-fnlock.desktop"
 	for t in $TOOLS; do rm -f "$BIN/$t"; done
-	rm -f "$PW/60-proart-2way.conf" "$WP/51-proart-names.conf" "$ENVD/90-nvidia-vaapi.conf" "$UNIT/proart-tweeter.service" "$WPS"
+	rm -f "$PW/60-proart-2way.conf" "$WP/51-proart-names.conf" "$ENVD/90-nvidia-vaapi.conf" "$UNIT/proart-tweeter.service" "$WPS" \
+	"$UNIT/org.gnome.Shell@.service.d/50-proart-uclamp.conf"
 	systemctl --user daemon-reload
 	restart_audio
 	echo "Done (log out and back in to drop the VA-API environment)."
@@ -72,6 +73,11 @@ fi
 echo "== 3/5 systemd user service proart-tweeter"
 install -d "$UNIT"
 install -m 644 "$HERE/systemd/proart-tweeter.service" "$UNIT/"
+# GNOME Shell on the fast cores (smooth at 120-180 Hz and with several monitors); from the next
+# login on, and right away for the running shell
+install -D -m 644 "$REPO/config/systemd-user/org.gnome.Shell@.service.d/50-proart-uclamp.conf" \
+	"$UNIT/org.gnome.Shell@.service.d/50-proart-uclamp.conf"
+pgrep -x gnome-shell >/dev/null && uclampset -m 768 -a -p "$(pgrep -x gnome-shell)" || true
 systemctl --user daemon-reload
 restart_audio
 systemctl --user enable --now proart-tweeter.service

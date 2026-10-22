@@ -82,6 +82,12 @@ check "Fn-lock indicator running" 'pgrep -f proart-fnlock'
 check "haptic click service" 'systemctl is-active proart-haptic'
 check "libinput touchpad quirk" 'test -f /etc/libinput/local-overrides.quirks'
 
+echo "== Desktop"
+# with energy-aware scheduling GNOME Shell otherwise runs on the efficiency cores at ~340 MHz
+um=$(uclampset -p "$(pgrep -x gnome-shell)" 2>/dev/null | sed -n 's/.*min.: \([0-9]*\).*/\1/p')
+[ "${um:-0}" -ge 768 ] && OK "GNOME Shell on the fast cores (uclamp min $um)" ||
+	WARN "GNOME Shell may run on the slow cores (uclamp min ${um:-?}; user/install-user.sh, then log in again)"
+
 echo "== GPU, video"
 check "NVIDIA driver ($(nvidia-smi --query-gpu=driver_version,pstate --format=csv,noheader 2>/dev/null))" 'nvidia-smi -L'
 check "snap EGL shim" 'test -f /usr/share/glvnd/egl_vendor.d/09_nvidia_snap.json -a -f /usr/lib/aarch64-linux-gnu/libnvidia-snap-egl.so'

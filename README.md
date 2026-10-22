@@ -56,6 +56,8 @@ issue), so some fixes may help there too - reports welcome.
 | Temperatures of 1000-6000 C, fan at 164613644 rpm | power meters exposed as thermal zones, broken EC path | [`drivers/proart-battery`](drivers/proart-battery) |
 | 4K YouTube stutters, video decoded on the CPU | Firefox snap without NVIDIA, VA-API not set up | [`install/07-video-firefox.sh`](install/07-video-firefox.sh) |
 | Snap apps (Snap Store, Chromium/Electron/Qt apps) slow, render with llvmpipe | snapd does not expose `libnvidia-rmapi-tegra` | [`install/09-snap-gpu.sh`](install/09-snap-gpu.sh) |
+| Dragging windows/files stutters at 120-180 Hz or with several monitors, GPU idle | GNOME Shell runs on the efficiency cores at ~340 MHz (energy-aware scheduling) | [`user/install-user.sh`](user/install-user.sh) (uclamp drop-in) |
+| All sound stops when the internal microphone stalls (e.g. while an echo canceller records) | the mic has a higher clock-driver priority than the speakers | [`config/wireplumber/51-proart-names.conf`](config/wireplumber/51-proart-names.conf) |
 | Speakers muted before a reboot are unmuted after it | WirePlumber 0.5 drops the mute of filter sinks (the 2-way crossover) | [`user/install-user.sh`](user/install-user.sh) |
 | GNOME Calls shows "no modem" for a Bluetooth phone, mute does nothing | PipeWire's oFono emulation is incomplete, callaudiod expects a phone | [`optional/phone-handsfree.sh`](optional/phone-handsfree.sh) |
 
