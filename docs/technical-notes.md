@@ -157,7 +157,25 @@ The tweeters and the headphone amp share `DL1`/`DP5`. `user/bin/proart-tweeter` 
 service) watches the `Headphone Jack` control (`iface=CARD`) with `alsactl monitor`: on insert it
 mutes the tweeter amp and makes "ProArt P16 Headphones" the default sink, on removal it reverts.
 
-### 4.6 Measurement pitfalls
+### 4.6 Don't let the internal microphone drive the speakers
+
+PipeWire puts nodes that are linked to each other into one graph, and the device with the highest
+`priority.driver` clocks it. The internal mic (`HiFi__Mic__source`, ALSA default 1616) outranks the
+speakers (1000). On its own that is harmless. But an app that links the mic and the speakers, such
+as `module-echo-cancel` with `monitor.mode` on the default sink (a voice assistant's echo filter),
+makes the mic the clock for every sound. After a few minutes the mic's timer-based scheduling
+derails: the driver waits ~44 ms per 5.3 ms quantum (pw-top W/Q ~8), the capture PCM hits XRUN
+several times a second, `spa.audioconvert: out of buffers` repeats every ~2.5 s, and notifications,
+calls and music crackle. The DMA itself keeps running at 48 kHz (hw_ptr), RT priorities are set and
+the SoundWire port setup is consistent, so this is a timing issue in the MT8901 capture path.
+
+Workarounds tried that make it worse: the mic as follower (`priority.driver` below the speakers)
+resyncs constantly; interrupt-driven scheduling (`api.alsa.disable-tsched`, 256-frame periods)
+gave ~900 XRUNs per minute. What works: keep the mic and the speakers in separate graphs, i.e. no
+echo filter or sink-monitor tap together with the internal mic. With a plain capture stream on the
+mic, measured over 2-3 minutes with notifications playing: 0 XRUNs, 48000 frames/s, 0 errors.
+
+### 4.7 Measurement pitfalls
 
 - After a PipeWire restart, WirePlumber picked the monitor of the new virtual sink as the default
   source; recordings then contained the digital signal, not the microphone. Always pass `--target`.
@@ -316,3 +334,7 @@ The IR camera works (alternating lit/dark frames from the strobing emitter, henc
   has no generic HID-over-SPI driver (the spi-hid series is still under review), so no automatic
   brightness. The webcam's presence sensor (iio `prox`) works.
 - ASUS fan/performance profiles: solved in `proart_battery` 1.2 (see section 3).
+- Audio after s2idle sleeps of more than a few minutes: the cs42l43 (mic, jack, tweeters) stops
+  delivering data until a reboot. Reloading the audio drivers does not help; keeping the audio
+  power domain on during sleep is being tested.
+- The internal mic as PipeWire graph driver derails after minutes (section 4.6).
