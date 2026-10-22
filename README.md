@@ -57,7 +57,6 @@ issue), so some fixes may help there too - reports welcome.
 | 4K YouTube stutters, video decoded on the CPU | Firefox snap without NVIDIA; Firefox blocklists NVIDIA decoding; VA-API cannot export frames on the N1X | [`install/07-video-firefox.sh`](install/07-video-firefox.sh) (Vulkan video decoding) |
 | Snap apps (Snap Store, Chromium/Electron/Qt apps) slow, render with llvmpipe | snapd does not expose `libnvidia-rmapi-tegra` | [`install/09-snap-gpu.sh`](install/09-snap-gpu.sh) |
 | Dragging windows/files stutters at 120-180 Hz or with several monitors, GPU idle | GNOME Shell runs on the efficiency cores at ~340 MHz (energy-aware scheduling) | [`user/install-user.sh`](user/install-user.sh) (uclamp drop-in) |
-| All sound stops when the internal microphone stalls (e.g. while an echo canceller records) | the mic has a higher clock-driver priority than the speakers | [`config/wireplumber/51-proart-names.conf`](config/wireplumber/51-proart-names.conf) |
 | Speakers muted before a reboot are unmuted after it | WirePlumber 0.5 drops the mute of filter sinks (the 2-way crossover) | [`user/install-user.sh`](user/install-user.sh) |
 | GNOME Calls shows "no modem" for a Bluetooth phone, mute does nothing | PipeWire's oFono emulation is incomplete, callaudiod expects a phone | [`optional/phone-handsfree.sh`](optional/phone-handsfree.sh) |
 
