@@ -49,6 +49,7 @@ issue), so some fixes may help there too - reports welcome.
 | Touchpad clicks do not vibrate (haptic touchpad) | pad has no auto trigger | `proart-haptic.service` ([`install/06-touchpad.sh`](install/06-touchpad.sh)) |
 | Keyboard backlight keeps blinking or fading, F4 does nothing | keyboard stays in ASUS OOBE demo mode | [`drivers/hid-asus-proart`](drivers/hid-asus-proart) |
 | Fn keys / Fn-lock (Fn+Esc) do nothing | no asus-wmi on arm64 | [`drivers/hid-asus-proart`](drivers/hid-asus-proart) |
+| After shutting down, the power button only works with the charger plugged in | PSCI power-off makes the EC cut the battery | [`drivers/proart-battery`](drivers/proart-battery) (powers off via UEFI) |
 | Laptop does not wake up from suspend | "deep" sleep instead of Modern Standby | s2idle in [`install/01-kernel.sh`](install/01-kernel.sh) (resume test pending) |
 | GNOME power modes do nothing, no Performance mode, fan always the same | ASUS fan modes only reachable through the EC | [`drivers/proart-battery`](drivers/proart-battery) |
 | No battery charge limit ("preserve battery health") | same | [`drivers/proart-battery`](drivers/proart-battery) |

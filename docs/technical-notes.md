@@ -86,7 +86,9 @@ is x86-only anyway. Their EC side is plain register traffic, so the driver repea
   the battery. Reboots and forced power-offs (holding the button) kept the RTC. arm64 Linux
   reboots via UEFI `ResetSystem()` but powers off via PSCI `SYSTEM_OFF`; the ACPI sleep control
   register is empty and there is no `_PTS`. proart_battery 1.4 powers off via
-  `ResetSystem(EfiResetShutdown)` (sys-off handler above PSCI's priority). Verification pending.
+  `ResetSystem(EfiResetShutdown)` (sys-off handler above PSCI's priority). Verified: power-off on
+  battery without the fix -> RTC 2000-01-01 and boot only with the charger; with the fix -> RTC
+  correct two minutes later and boot on battery with the power button.
 
 Measured on battery, 35 s full load on all cores, real clock from the CPPC feedback counters:
 
