@@ -55,6 +55,9 @@ echo "== 2/5 PipeWire crossover, WirePlumber names, VA-API environment"
 install -d "$PW" "$WP" "$ENVD"
 install -m 644 "$REPO/config/pipewire/60-proart-2way.conf" "$PW/"
 install -m 644 "$REPO/config/wireplumber/51-proart-names.conf" "$WP/"
+# 51-proart-names.conf hides the woofer port; the woofer amps are then switched by the UCM profile
+diff -rq "$REPO/config/ucm2/MediaTek/mt8901-soundwir" /usr/share/alsa/ucm2/MediaTek/mt8901-soundwir >/dev/null 2>&1 ||
+	echo "WARNING: the installed UCM profile is older than this repo, the woofers stay silent: run sudo bash install/03-audio.sh"
 install -m 644 "$REPO/config/environment.d/90-nvidia-vaapi.conf" "$ENVD/"
 if [ -f "$WPS_SYS" ]; then
 	install -d "$(dirname "$WPS")"

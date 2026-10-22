@@ -106,6 +106,14 @@ The card only offered a dummy output: Ubuntu's alsa-ucm-conf has no profile for 
 NVIDIA's profiles (alsa-ucm-conf PR #862) select `HiFi-cs42l43-cs35l56x2.conf` for this laptop
 (CS42L43 + 2x CS35L56, all on link 1). Speakers, headphones, internal and headset mic work with it.
 
+Local changes to that file: the amps run at 0 dB (see 4.2), and the port names are the ones GNOME
+shows. GNOME labels the ports of a card "<port> – <card>", so `51-proart-names.conf` gives the card
+an empty description and the UCM comments read "ProArt P16 Microphone", "ProArt P16 Headphones" and
+"ProArt P16 Headset Microphone". The woofer port is hidden (`api.acp.hidden-ports`), since the
+speakers are the 2-way sink of 4.3. PipeWire never enables a hidden port (route selection skips it,
+`acp_device_set_port` refuses it), so the woofer amp switches moved from the Speaker device to the
+verb's enable sequence.
+
 ### 4.2 ASUS speaker tuning and the missing SSID
 
 The CS35L56 amps logged `FIRMWARE_MISSING` / "Calibration disabled": linux-firmware has no tuning

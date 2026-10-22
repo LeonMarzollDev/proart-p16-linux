@@ -58,6 +58,7 @@ issue), so some fixes may help there too - reports welcome.
 | Snap apps (Snap Store, Chromium/Electron/Qt apps) slow, render with llvmpipe | snapd does not expose `libnvidia-rmapi-tegra` | [`install/09-snap-gpu.sh`](install/09-snap-gpu.sh) |
 | Dragging windows/files stutters at 120-180 Hz or with several monitors, GPU idle | GNOME Shell runs on the efficiency cores at ~340 MHz (energy-aware scheduling) | [`user/install-user.sh`](user/install-user.sh) (uclamp drop-in) |
 | Every sound starts crackling a few minutes after an echo canceller / voice assistant starts | the internal mic becomes the clock for the speakers and its timing derails | keep mic and speakers in separate graphs ([docs 4.6](docs/technical-notes.md)) |
+| Sound settings list "Internal speakers – ProArt P16 Audio" next to the speakers, the mic as "Internal microphone array – ProArt P16 Audio" | GNOME names card ports "<port> – <card>"; the woofer port of the crossover is listed too | port names in the UCM profile, woofer port hidden ([docs 4.1](docs/technical-notes.md)) |
 | Speakers muted before a reboot are unmuted after it | WirePlumber 0.5 drops the mute of filter sinks (the 2-way crossover) | [`user/install-user.sh`](user/install-user.sh) |
 | GNOME Calls shows "no modem" for a Bluetooth phone, mute does nothing | PipeWire's oFono emulation is incomplete, callaudiod expects a phone | [`optional/phone-handsfree.sh`](optional/phone-handsfree.sh) |
 
