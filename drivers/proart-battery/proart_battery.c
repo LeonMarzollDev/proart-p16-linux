@@ -76,6 +76,12 @@ module_param(efi_poweroff, bool, 0444);
 MODULE_PARM_DESC(efi_poweroff,
 		 "Power off through UEFI ResetSystem instead of PSCI SYSTEM_OFF (default true)");
 
+/* off: the EC then cuts power to the audio codecs (crackling, cs42l43 does not recover) */
+static bool standby_notify;
+module_param(standby_notify, bool, 0644);
+MODULE_PARM_DESC(standby_notify,
+		 "Tell the EC about sleep like Windows' Modern Standby _DSM (default false, experimental)");
+
 static bool hide_acpi = true;
 module_param(hide_acpi, bool, 0444);
 MODULE_PARM_DESC(hide_acpi, "Unbind the non-working ACPI BAT0/AC0 while loaded (default true)");
@@ -99,6 +105,7 @@ struct proart_bat {
 
 	struct device *hwmon, *ppdev;
 	struct sys_off_handler *sys_off;
+	bool pdrv_registered;
 	struct notifier_block pm_nb;
 	struct work_struct resume_work;
 	struct device *acpi_bat_dev, *acpi_ac_dev, *acpi_fan_dev;
@@ -678,6 +685,64 @@ static void proart_resume_work(struct work_struct *work)
 	mutex_unlock(&pb->lock);
 }
 
+/*
+ * Modern Standby firmware notifications (PEPD _DSM 11e00d56-ce64-47ce-837b-1f898f9aa461): the
+ * AML forwards them to the EC as data-less commands, but through the broken FF-A path, and arm64
+ * Linux does not call the _DSM anyway. Same order as Linux uses on x86 (drivers/acpi/x86/s2idle.c).
+ * Without them the EC keeps the fans running during s2idle and the laptop draws ~11 W asleep.
+ * They are sent in the noirq phase, after every other device (audio included) has suspended.
+ * Either way (PM_SUSPEND_PREPARE or noirq) the EC then cuts the audio codecs' power: the speakers
+ * crackle and the cs42l43 (microphone, jack, tweeters) only recovers after a reboot. Hence off by
+ * default until the EC side is understood.
+ */
+/* display off, standby entry, sleep entry / sleep exit, standby exit, display on */
+static const u8 ec_standby_entry[] = { 0xb7, 0x9a, 0xae };
+static const u8 ec_standby_exit[] = { 0xaf, 0x9b, 0xb8 };
+
+static void ec_standby(const u8 *cmds, int n)
+{
+	int i;
+
+	mutex_lock(&pb->lock);
+	for (i = 0; i < n; i++)
+		if (ec_command(false, cmds[i], NULL, 0, NULL))
+			pr_warn("proart_battery: EC standby command %#x failed\n", cmds[i]);
+	mutex_unlock(&pb->lock);
+}
+
+static int proart_suspend_noirq(struct device *dev)
+{
+	if (standby_notify)
+		ec_standby(ec_standby_entry, ARRAY_SIZE(ec_standby_entry));
+	return 0;
+}
+
+static int proart_resume_noirq(struct device *dev)
+{
+	if (standby_notify)
+		ec_standby(ec_standby_exit, ARRAY_SIZE(ec_standby_exit));
+	return 0;
+}
+
+static const struct dev_pm_ops proart_pm_ops = {
+	.suspend_noirq = proart_suspend_noirq,
+	.resume_noirq = proart_resume_noirq,
+};
+
+/* binds to the driver's own platform device, only for the PM callbacks above */
+static int proart_pdrv_probe(struct platform_device *pdev)
+{
+	return 0;
+}
+
+static struct platform_driver proart_pdrv = {
+	.probe = proart_pdrv_probe,
+	.driver = {
+		.name = "proart-battery",
+		.pm = &proart_pm_ops,
+	},
+};
+
 static int proart_pm_notify(struct notifier_block *nb, unsigned long action, void *data)
 {
 	if (action == PM_POST_SUSPEND)
@@ -888,6 +953,9 @@ static int __init proart_bat_init(void)
 	}
 
 	proart_ec_extras_init();
+	pb->pdrv_registered = !platform_driver_register(&proart_pdrv);
+	if (!pb->pdrv_registered)
+		pr_warn("proart_battery: no suspend callbacks, the EC is not told about sleep\n");
 	if (efi_poweroff && efi_enabled(EFI_RUNTIME_SERVICES) && efi.reset_system) {
 		/* priorities are unique per chain; anything above PSCI's FIRMWARE level runs first */
 		pb->sys_off = register_sys_off_handler(SYS_OFF_MODE_POWER_OFF, SYS_OFF_PRIO_FIRMWARE + 16,
@@ -932,6 +1000,8 @@ static void __exit proart_bat_exit(void)
 
 	if (pb->sys_off)
 		unregister_sys_off_handler(pb->sys_off);
+	if (pb->pdrv_registered)
+		platform_driver_unregister(&proart_pdrv);
 	unregister_pm_notifier(&pb->pm_nb);
 	cancel_work_sync(&pb->resume_work);
 	cancel_delayed_work_sync(&pb->work);

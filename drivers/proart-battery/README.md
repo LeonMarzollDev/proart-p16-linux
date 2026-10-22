@@ -51,7 +51,13 @@ charger was plugged in); after reboots and forced power-offs it did not. The dri
 power-off handler that calls `ResetSystem(EfiResetShutdown)` first (`efi_poweroff=1`); if that
 returns, PSCI powers off as before.
 
-Module parameters: `poll_interval` (s, default 10), `hide_acpi` (default 1), `efi_poweroff` (default 1).
+Sleep: the Modern Standby notifications Windows sends the EC (display off `0xb7`, standby entry
+`0x9a`, sleep entry `0xae` and the reverse on wake) are implemented but off: the EC then cuts the
+audio codecs' power (speakers crackle, cs42l43 microphone/jack stays dead until a reboot).
+Without them s2idle works but draws ~11 W and the fans keep running.
+
+Module parameters: `poll_interval` (s, default 10), `hide_acpi` (default 1), `efi_poweroff` (default 1),
+`standby_notify` (default 0, experimental).
 The module only loads on DMI vendor `ASUS` / board `H7607BA`.
 
 Install: `install/04-battery.sh` (DKMS). License: GPL-2.0.
