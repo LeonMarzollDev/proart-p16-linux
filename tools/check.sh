@@ -64,6 +64,9 @@ check "speaker tuning loaded (cs35l56 firmware UID 10431484)" 'kmsg | grep -q "p
 check "speaker DSP firmware running" 'kmsg | grep -q "cs35l56.*DSP1: Firmware:"'
 check "speaker sink proart_speakers" 'pw-cli ls Node | grep -q "node.name = \"proart_speakers\""'
 check "tweeter service" 'systemctl --user is-active proart-tweeter'
+# optional/phone-handsfree.sh
+[ -f ~/.config/systemd/user/proart-phone-bridge.service ] &&
+	check "phone call bridge (GNOME Calls)" 'systemctl --user is-active proart-phone-bridge'
 # user/install-user.sh puts a fixed copy of WirePlumber's state-stream.lua in the user's data dir
 WPS=~/.local/share/wireplumber/scripts/node/state-stream.lua
 if [ ! -f $WPS ]; then

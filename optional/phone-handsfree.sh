@@ -45,7 +45,9 @@ as_user gsettings set org.gnome.Calls autoload-plugins "['mm', 'sip', 'ofono']"
 pkill -u "$TUSER" -x callaudiod || true
 as_user systemctl --user daemon-reload
 as_user systemctl --user restart wireplumber
-as_user systemctl --user enable --now proart-phone-bridge.service
+# reenable: earlier versions were linked into default.target
+as_user systemctl --user reenable proart-phone-bridge.service
+as_user systemctl --user restart proart-phone-bridge.service
 sleep 3
 as_user systemctl --user --no-pager --lines=4 status proart-phone-bridge | tail -4
 

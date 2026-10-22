@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
 [Unit]
 Description=ASUS ProArt P16: enable the tweeters and mute them while headphones are plugged in
-After=pipewire.service wireplumber.service
+# sound.target: the card must exist, otherwise the first starts fail ("Invalid card number")
+After=pipewire.service wireplumber.service sound.target
 Wants=wireplumber.service
 
 [Service]

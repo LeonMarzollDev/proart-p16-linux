@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: GPL-2.0-only
 [Unit]
 Description=Phone calls through a paired phone in GNOME Calls (bridge to PipeWire telephony)
-After=pipewire.service wireplumber.service
+# part of the graphical session: started again with every new GNOME session (also after a
+# shell crash or re-login, when the session bus names are lost), stopped at logout
+After=graphical-session.target pipewire.service wireplumber.service
+PartOf=graphical-session.target
 
 [Service]
 ExecStart=%h/.local/bin/proart-phone-bridge
 Environment=PYTHONWARNINGS=ignore::DeprecationWarning
-Restart=on-failure
+Restart=always
 RestartSec=3
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
