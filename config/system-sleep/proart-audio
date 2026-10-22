@@ -1,0 +1,36 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# ASUS ProArt P16 H7607BA: keep the audio power domain powered during s2idle.
+#
+# On system suspend mtk-soundwire drops its MTCMOS votes so the SoC can reach PPS7/PPS8. After a
+# few minutes in that state AUDIO_PD loses power, and state the firmware sets at boot is gone:
+# the cs42l43 (mic, jack, tweeters) stops producing data and the speakers crackle until a reboot.
+# Reloading the audio drivers does not bring it back. So before sleeping this asks the SSPM
+# firmware (through power_wrap's request node, the same path the AFE driver uses) for its
+# always-on audio power scene and an extra AUDIO_PD vote, and releases both after waking.
+# Installed to /usr/lib/systemd/system-sleep/ by optional/sleep-audio.sh.
+REQ=/sys/bus/platform/devices/NVDA6210:00/pwrap_power_ctrl_req
+LOG="logger -t proart-audio"
+
+# \_SB.ASD0 = MT8901 AFE; commands from mt8901-afe-clk.h: 0 = MTCMOS (domain 2 = AUDIO_PD),
+# 6 = PWR_CTRL_SCENE (0 = normal, 2 = always on)
+sspm() {
+	if echo "\\_SB.ASD0 $*" > "$REQ" 2>/dev/null; then
+		$LOG "SSPM audio request $*"
+	else
+		$LOG "SSPM audio request $* failed"
+	fi
+}
+
+[ -w "$REQ" ] || { $LOG "power_wrap request node missing, audio not kept on"; exit 0; }
+case "$1" in
+pre)
+	sspm 6 2 0 0
+	sspm 0 2 1 0
+	;;
+post)
+	sspm 0 2 0 0
+	sspm 6 0 0 0
+	;;
+esac
+exit 0
