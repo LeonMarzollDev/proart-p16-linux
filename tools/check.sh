@@ -41,6 +41,7 @@ else
 fi
 bogus=$(for t in /sys/class/thermal/thermal_zone*/temp; do v=$(cat $t 2>/dev/null); [ "${v:-0}" -gt 150000 ] && echo $t; done)
 [ -z "$bogus" ] && OK "no impossible temperatures" || WARN "thermal zones above 150 C: $bogus"
+check "power off through UEFI (battery stays connected)" 'journalctl -k -b --no-pager | grep -q "powering off through UEFI ResetSystem"'
 check "UPower offers the charge limit" 'busctl get-property org.freedesktop.UPower /org/freedesktop/UPower/devices/battery_BAT1 org.freedesktop.UPower.Device ChargeThresholdSupported | grep -q true'
 
 echo "== Audio"

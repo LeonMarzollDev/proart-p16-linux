@@ -27,12 +27,14 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/dmi.h>
+#include <linux/efi.h>
 #include <linux/hwmon.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/platform_profile.h>
 #include <linux/power_supply.h>
+#include <linux/reboot.h>
 #include <linux/suspend.h>
 #include <linux/uuid.h>
 #include <linux/workqueue.h>
@@ -69,6 +71,11 @@ static unsigned int poll_interval = 10;
 module_param(poll_interval, uint, 0644);
 MODULE_PARM_DESC(poll_interval, "Polling interval in seconds (default 10)");
 
+static bool efi_poweroff = true;
+module_param(efi_poweroff, bool, 0444);
+MODULE_PARM_DESC(efi_poweroff,
+		 "Power off through UEFI ResetSystem instead of PSCI SYSTEM_OFF (default true)");
+
 static bool hide_acpi = true;
 module_param(hide_acpi, bool, 0444);
 MODULE_PARM_DESC(hide_acpi, "Unbind the non-working ACPI BAT0/AC0 while loaded (default true)");
@@ -91,6 +98,7 @@ struct proart_bat {
 	u32 charge_limit;		/* percent, 100 = no limit */
 
 	struct device *hwmon, *ppdev;
+	struct sys_off_handler *sys_off;
 	struct notifier_block pm_nb;
 	struct work_struct resume_work;
 	struct device *acpi_bat_dev, *acpi_ac_dev, *acpi_fan_dev;
@@ -731,6 +739,18 @@ static void proart_ec_extras_exit(void)
 		hwmon_device_unregister(pb->hwmon);
 }
 
+/*
+ * arm64 Linux reboots through UEFI ResetSystem() but powers off with PSCI SYSTEM_OFF. After a
+ * SYSTEM_OFF the EC cuts the battery (the RTC is reset and the power button only works again
+ * with the charger plugged in); after a reboot it does not. Power off the way the reboot goes.
+ * If ResetSystem() returns, the next handler (PSCI) powers off as before.
+ */
+static int proart_efi_power_off(struct sys_off_data *data)
+{
+	efi.reset_system(EFI_RESET_SHUTDOWN, EFI_SUCCESS, 0, NULL);
+	return NOTIFY_DONE;
+}
+
 static int match_uuid(struct device *dev, const void *data)
 {
 	return uuid_equal(&to_ffa_dev(dev)->uuid, data);
@@ -868,6 +888,18 @@ static int __init proart_bat_init(void)
 	}
 
 	proart_ec_extras_init();
+	if (efi_poweroff && efi_enabled(EFI_RUNTIME_SERVICES) && efi.reset_system) {
+		/* priorities are unique per chain; anything above PSCI's FIRMWARE level runs first */
+		pb->sys_off = register_sys_off_handler(SYS_OFF_MODE_POWER_OFF, SYS_OFF_PRIO_FIRMWARE + 16,
+						       proart_efi_power_off, NULL);
+		if (IS_ERR(pb->sys_off)) {
+			pr_warn("proart_battery: UEFI power-off handler not registered (%ld)\n",
+				PTR_ERR(pb->sys_off));
+			pb->sys_off = NULL;
+		} else {
+			pr_info("proart_battery: powering off through UEFI ResetSystem\n");
+		}
+	}
 	pb->pm_nb.notifier_call = proart_pm_notify;
 	register_pm_notifier(&pb->pm_nb);
 
@@ -898,6 +930,8 @@ static void __exit proart_bat_exit(void)
 {
 	int i;
 
+	if (pb->sys_off)
+		unregister_sys_off_handler(pb->sys_off);
 	unregister_pm_notifier(&pb->pm_nb);
 	cancel_work_sync(&pb->resume_work);
 	cancel_delayed_work_sync(&pb->work);

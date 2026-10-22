@@ -45,7 +45,13 @@ the misleading thermal zones `\_TZ.PSYS`, `\_TZ.PSOC` (power shown as 1000-6000 
 and `\_TZ.THZ0` (fixed fallback values from the broken EC path) are unbound (`hide_acpi=1`), so
 desktops and sensor tools only show working devices; unloading re-attaches them.
 
-Module parameters: `poll_interval` (s, default 10), `hide_acpi` (default 1).
+Power off: arm64 Linux reboots through UEFI `ResetSystem()` but powers off with PSCI `SYSTEM_OFF`.
+After a `SYSTEM_OFF` the EC cut the battery (RTC reset to 2000-01-01, power button dead until the
+charger was plugged in); after reboots and forced power-offs it did not. The driver registers a
+power-off handler that calls `ResetSystem(EfiResetShutdown)` first (`efi_poweroff=1`); if that
+returns, PSCI powers off as before.
+
+Module parameters: `poll_interval` (s, default 10), `hide_acpi` (default 1), `efi_poweroff` (default 1).
 The module only loads on DMI vendor `ASUS` / board `H7607BA`.
 
 Install: `install/04-battery.sh` (DKMS). License: GPL-2.0.

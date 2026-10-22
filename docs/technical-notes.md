@@ -81,6 +81,13 @@ is x86-only anyway. Their EC side is plain register traffic, so the driver repea
   path and only return fallback values (60 C, 19 C). The driver unbinds these four and reports
   fan, both EC temperatures and both power values through hwmon `proart_ec`.
 
+- Power off: after `systemctl poweroff` the laptop could not be switched on with the power
+  button until the charger was plugged in, and the RTC came back as 2000-01-01 - the EC had cut
+  the battery. Reboots and forced power-offs (holding the button) kept the RTC. arm64 Linux
+  reboots via UEFI `ResetSystem()` but powers off via PSCI `SYSTEM_OFF`; the ACPI sleep control
+  register is empty and there is no `_PTS`. proart_battery 1.4 powers off via
+  `ResetSystem(EfiResetShutdown)` (sys-off handler above PSCI's priority). Verification pending.
+
 Measured on battery, 35 s full load on all cores, real clock from the CPPC feedback counters:
 
 | GNOME mode | ASUS mode | all-core clock | fan | battery draw |
