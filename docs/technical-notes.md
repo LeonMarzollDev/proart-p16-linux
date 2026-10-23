@@ -363,3 +363,13 @@ The IR camera works (alternating lit/dark frames from the strobing emitter, henc
   delivering data until a reboot. Reloading the audio drivers does not help; keeping the audio
   power domain on during sleep is being tested.
 - The internal mic as PipeWire graph driver derails after minutes (section 4.6).
+- GPU power on battery: under Linux the GPU stays at about 20 W on battery (nvidia-smi clocks
+  event reason "Reliability", SM ~1.0 GHz) in every power mode; on AC it reaches 37 W+. Windows
+  keeps nearly full GPU performance on battery (Notebookcheck: Cyberpunk 2077 QHD 56.2 fps on battery
+  vs 56.8 fps on AC). The ASUS side is not the limit: WMI `0x00120075` (fan mode) is the only
+  mode switch, `0x001200A0`/`0x001200A3` set PL2/PL1 (EC mailbox `0x28`/`0x29`) with no DC
+  variant, and the CPU reaches ~80 W on battery. The GPU limit comes from NVIDIA: the NVPCF `_DSM`
+  (`NPCF`, `NVDA0820`, version 3.0) returns an encrypted 128-byte table, the firmware has no GPS
+  `_DSM` (the interface an x86 SBIOS uses to steer TGP on AC/DC transitions), `nvidia-powerd`
+  (Dynamic Boost) is not shipped for arm64, and `nvidia-smi` reports every power limit as N/A.
+  So there is no Linux-side setting; it needs an NVIDIA driver change.
