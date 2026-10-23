@@ -252,8 +252,11 @@ driver applies an ACPI battery cap. Its registry key `RMSkipACPIBattCap` (presen
 firmware; NVIDIA's Windows driver sets it on Surface laptops, see NVIDIA/open-gpu-kernel-modules
 PR #1468) turns that cap off: `config/modprobe.d/proart-nvidia-battery-cap.conf`, installed by
 `install/02-nvidia.sh`. Measured on AC, 15 s bf16 matmul: 42-66 W at 1.8-2.4 GHz (before 26-37 W),
-73 C, fan 5300 rpm. On battery the GPU is then no longer capped either (like Windows, where
-Notebookcheck measured nearly AC performance on battery); the battery drains faster under GPU load.
+73 C, fan 5300 rpm. On battery a second limit remains: the same test gives 20 W at ~1.0 GHz with
+clocks event reason "Reliability" (0x400) the whole time, unaffected by the key, so it does not come
+from the driver's power-source handling (which says "battery" in both cases) but from the platform's
+DC policy. Windows loses ~16 % GPU performance on battery (Notebookcheck, Steel Nomad); here it is
+about half. Not solved (section 9).
 
 ## 5b. Power saving
 
@@ -377,3 +380,5 @@ The IR camera works (alternating lit/dark frames from the strobing emitter, henc
   delivering data until a reboot. Reloading the audio drivers does not help; keeping the audio
   power domain on during sleep is being tested.
 - The internal mic as PipeWire graph driver derails after minutes (section 4.6).
+- GPU on battery: 20 W at ~1.0 GHz (clocks event reason "Reliability") even with the ACPI battery cap
+  turned off (section 5, "GPU power"); on AC 42-66 W. The limit comes from the platform's DC policy.
