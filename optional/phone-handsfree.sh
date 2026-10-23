@@ -10,6 +10,7 @@
 # conflicts with ModemManager, and apt then removes GNOME Calls.
 # Afterwards pair the phone in Settings -> Bluetooth and allow phone calls on the phone.
 # Remove: systemctl --user disable --now proart-phone-bridge; rm ~/.local/bin/proart-phone-bridge \
+#         ~/.config/systemd/user/calls-daemon.service.d/50-gapplication-service.conf \
 #   ~/.config/systemd/user/proart-phone-bridge.service \
 #   ~/.local/share/dbus-1/services/org.mobian_project.CallAudio.service \
 #   ~/.config/wireplumber/wireplumber.conf.d/52-proart-bluetooth-handsfree.conf;
@@ -41,6 +42,10 @@ as_user install -D -m 644 "$REPO/config/dbus/org.mobian_project.CallAudio.servic
 	"$THOME/.local/share/dbus-1/services/org.mobian_project.CallAudio.service"
 as_user install -D -m 644 "$REPO/config/wireplumber/52-proart-bluetooth-handsfree.conf" \
 	"$THOME/.config/wireplumber/wireplumber.conf.d/52-proart-bluetooth-handsfree.conf"
+# Ubuntu's calls-daemon.service still passes --daemon, which gnome-calls 49 rejects: Calls would not
+# run in the background and incoming calls would not ring
+as_user install -D -m 644 "$REPO/config/systemd-user/calls-daemon.service.d/50-gapplication-service.conf" \
+	"$THOME/.config/systemd/user/calls-daemon.service.d/50-gapplication-service.conf"
 as_user gsettings set org.gnome.Calls autoload-plugins "['mm', 'sip', 'ofono']"
 pkill -u "$TUSER" -x callaudiod || true
 as_user systemctl --user daemon-reload
@@ -48,6 +53,8 @@ as_user systemctl --user restart wireplumber
 # reenable: earlier versions were linked into default.target
 as_user systemctl --user reenable proart-phone-bridge.service
 as_user systemctl --user restart proart-phone-bridge.service
+as_user systemctl --user reset-failed calls-daemon.service 2>/dev/null || true
+as_user systemctl --user restart calls-daemon.service || true
 sleep 3
 as_user systemctl --user --no-pager --lines=4 status proart-phone-bridge | tail -4
 
