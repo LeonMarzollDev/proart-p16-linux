@@ -85,11 +85,16 @@ def run():
             ev = os.open(devs[1], os.O_RDONLY)
             print(f"touchpad {devs[1]}, haptics {devs[0]}, press {conf['PRESS']}, "
                   f"release {conf['RELEASE']}, intensity {conf['INTENSITY']}", flush=True)
+            first = True
             while True:
                 data = os.read(ev, EVENT.size * 64)
                 for _, _, typ, code, value in EVENT.iter_unpack(data):
                     if typ == EV_KEY and code == BTN_LEFT and value in (0, 1):
                         play(raw, conf["PRESS"] if value else conf["RELEASE"], conf["INTENSITY"])
+                        if first and value:
+                            # shows in the journal whether clicks arrive when the feedback seems missing
+                            print("first click since start: waveform sent", flush=True)
+                            first = False
         except OSError as e:
             # the pad goes away on suspend/driver reload; wait for it to come back
             print(f"touchpad lost ({e}), waiting", flush=True)
