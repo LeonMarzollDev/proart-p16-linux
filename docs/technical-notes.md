@@ -241,6 +241,20 @@ Test inside `snap run --shell <snap>` with a surfaceless EGL context: without th
 "Mesa / llvmpipe", with it "NVIDIA / NVIDIA RTX Spark N1X". Only EGL is covered (GLX and Vulkan
 inside snaps still fail). The proper fix is adding `libnvidia-rmapi-tegra.so*` to snapd's list.
 
+### GPU power: the driver believed it ran on battery
+
+The GPU stayed at 20-30 W (SM ~1.0-1.5 GHz, clocks event reason "Reliability") on battery and on
+AC. NVML's `nvmlDeviceGetPowerSource` reported BATTERY with the charger plugged in. The NVIDIA
+driver takes the power source from ACPI `\_SB.AC0._PSR`, which reads EC register `0x90` through
+the FF-A operation region (`RRA9`) and always answers "offline" (the ACPI AC driver showed the same:
+AC0 offline while charging; the EC itself reports AC correctly, see section 3). On battery the
+driver applies an ACPI battery cap. Its registry key `RMSkipACPIBattCap` (present in the 615 GSP
+firmware; NVIDIA's Windows driver sets it on Surface laptops, see NVIDIA/open-gpu-kernel-modules
+PR #1468) turns that cap off: `config/modprobe.d/proart-nvidia-battery-cap.conf`, installed by
+`install/02-nvidia.sh`. Measured on AC, 15 s bf16 matmul: 42-66 W at 1.8-2.4 GHz (before 26-37 W),
+73 C, fan 5300 rpm. On battery the GPU is then no longer capped either (like Windows, where
+Notebookcheck measured nearly AC performance on battery); the battery drains faster under GPU load.
+
 ## 5b. Power saving
 
 - PCIe ASPM: the firmware leaves L1 and the L1 substates off on every link (SSD, Wi-Fi, SD reader)
@@ -363,13 +377,3 @@ The IR camera works (alternating lit/dark frames from the strobing emitter, henc
   delivering data until a reboot. Reloading the audio drivers does not help; keeping the audio
   power domain on during sleep is being tested.
 - The internal mic as PipeWire graph driver derails after minutes (section 4.6).
-- GPU power on battery: under Linux the GPU stays at about 20 W on battery (nvidia-smi clocks
-  event reason "Reliability", SM ~1.0 GHz; measured in Performance mode); on AC it reaches 37 W+. Windows
-  keeps nearly full GPU performance on battery (Notebookcheck: Cyberpunk 2077 QHD 56.2 fps on battery
-  vs 56.8 fps on AC). The ASUS side is not the limit: WMI `0x00120075` (fan mode) is the only
-  mode switch, `0x001200A0`/`0x001200A3` set PL2/PL1 (EC mailbox `0x28`/`0x29`) with no DC
-  variant, and the CPU reaches ~80 W on battery. The GPU limit comes from NVIDIA: the NVPCF `_DSM`
-  (`NPCF`, `NVDA0820`, version 3.0) returns an encrypted 128-byte table, the firmware has no GPS
-  `_DSM` (the interface an x86 SBIOS uses to steer TGP on AC/DC transitions), `nvidia-powerd`
-  (Dynamic Boost) is not shipped for arm64, and `nvidia-smi` reports every power limit as N/A.
-  So there is no Linux-side setting; it needs an NVIDIA driver change.

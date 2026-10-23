@@ -96,6 +96,8 @@ um=$(uclampset -p "$(pgrep -x gnome-shell)" 2>/dev/null | sed -n 's/.*min.: \([0
 
 echo "== GPU, video"
 check "NVIDIA driver ($(nvidia-smi --query-gpu=driver_version,pstate --format=csv,noheader 2>/dev/null))" 'nvidia-smi -L'
+# the firmware reports "battery" on AC too (ACPI _PSR); without this key the GPU stays at its battery cap
+check "GPU battery cap off (RMSkipACPIBattCap, install/02-nvidia.sh)" 'grep -q "RMSkipACPIBattCap=1" /proc/driver/nvidia/params'
 check "snap EGL shim" 'test -f /usr/share/glvnd/egl_vendor.d/09_nvidia_snap.json -a -f /usr/lib/aarch64-linux-gnu/libnvidia-snap-egl.so'
 check "VA-API environment" 'test -f ~/.config/environment.d/90-nvidia-vaapi.conf' WARN
 
