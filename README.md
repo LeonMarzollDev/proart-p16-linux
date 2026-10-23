@@ -8,7 +8,9 @@ suspend, GNOME power modes (ASUS fan modes), a battery charge limit, hardware se
 touchpad clicks and GPU acceleration, including for snap apps.
 
 Everything here was worked out on one unit; see [docs/technical-notes.md](docs/technical-notes.md)
-for the why and [docs/hardware.md](docs/hardware.md) for the hardware map. Other NVIDIA N1X/GB10
+for the why and [docs/hardware.md](docs/hardware.md) for the hardware map. How fast local LLMs run on the
+N1X (Qwen3.8 27B and Flash-Next with vLLM: speed, context, quality) is in
+[docs/local-llm-benchmarks.md](docs/local-llm-benchmarks.md). Other NVIDIA N1X/GB10
 machines share parts of the platform (FF-A EC service, MT8901 SoundWire audio, the snap EGL
 issue), so some fixes may help there too - reports welcome.
 

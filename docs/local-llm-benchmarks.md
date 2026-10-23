@@ -1,0 +1,126 @@
+# Local LLMs on the ProArt P16 (NVIDIA RTX Spark N1X): speed and quality
+
+Measurements of Qwen3.8 27B and Qwen3.8 Flash-Next served with vLLM on the ProArt P16 H7607BA, October 2026:
+how fast they generate and read prompts, how speculative decoding (MTP, DFlash) changes that, how much memory the
+context needs, how far the context goes, and whether quality holds up. One request at a time (a single chat), the
+way a local assistant or coding tool uses a model.
+
+## Summary
+
+| Model / preset | Generation | 30k prompt: new / again | Quality (code · tools · math) | Needs |
+|---|---|---|---|---|
+| **Qwen3.8 Flash-Next** (MoE, MTP×4) | **59.9 tok/s** (code 64.5) | **12.6 s / 0.2 s** | **97.5 % · 93 % · 98 %** | ~98 GiB: everything else must pause; 8–10 min start |
+| Qwen3.8 27B, DFlash2×10 ("fast") | 35.1 tok/s (code 64.3) | 15.7 s / 5.8 s | 95 % · 88 % · 96 % (×12) | ~45–63 GiB |
+| Qwen3.8 27B, MTP×4 ("agents") | 32.0 tok/s (code 36.8) | 16.4 s / 1.9 s | 95 % · 88 % · 98 % | ~40–63 GiB |
+
+- **Flash-Next is the fastest in every measurement** (generation ~1.7–1.9×, prompt reading at 30k ~1.3×, a cached
+  prompt ~9× faster) because only 10 of its 512 experts run per token, **and at least as good on every quality
+  test** (better on tool calls, especially parallel ones: 19 vs 16 of 20). It needs nearly all of the memory
+  (anything else that uses the GPU must pause) and a start takes ~10 minutes.
+- **For the 27B, speculative decoding is the lever**: 12 → 32–38 tokens/s. DFlash is fastest on output but this vLLM
+  build reads every prompt again in full; MTP keeps the prompt cache, which wins for agents and long conversations.
+- **Generation is limited by memory bandwidth** (~300 GB/s, shared by CPU and GPU): more CPU cores, the GPU
+  battery-cap fix or the Performance profile change it very little.
+
+## Setup
+
+| | |
+|---|---|
+| Laptop | ASUS ProArt P16 H7607BA, NVIDIA RTX Spark N1X, 20 Arm cores (10× Cortex-X925, 10× Cortex-A725) |
+| Memory | 128 GB LPDDR5X shared by CPU and GPU; 113.9 GiB usable by Linux (2.1 GiB crash kernel + ~11.7 GiB firmware reserved) |
+| System | Ubuntu 26.04.1, kernel 7.0.0-1023-nvidia, NVIDIA driver 615.71.09, on AC power |
+| Power | the GPU battery-cap fix of this repo (`NVreg_RMSkipACPIBattCap=1`) active; profile Balanced or Performance as noted |
+| Server | vLLM in Docker: `ghcr.io/timothystewart6/vllm-gb10:v0.30.0-gb10.3` (27B), `eugr/spark-vllm-b12x:nightly-20261015` (Flash-Next) |
+| 27B model | NVIDIA's Qwen3.8-27B NVFP4 checkpoint (ModelOpt: MLP + lm_head NVFP4, attention FP8; 21 GB) |
+| DFlash drafter | Qwen3.8-27B-DFlash2 (3.6 GB) |
+| Flash-Next | NVIDIA's Qwen3.8-Flash-Next-FP4-Local (MoE: 48 layers, 512 experts, 10 active; 96 GiB on disk, ~72 GB in memory) |
+
+**Method.** Generation ("decode"): three prompts (code, prose, structured output) × 512 tokens, temperature 0;
+the median is the middle one of the three. Prompt reading ("prefill"): unique prompts of 1.8k / 7.5k / 30k tokens,
+then the same prompt again (prefix cache). Quality: 40 HumanEval tasks (the generated code runs against the tests
+in a container without network), 60 BFCL v3 function-calling tasks (20 simple, 20 multiple, 20 parallel; function
+name and every argument must be right), 50 GSM8K math problems; temperature 0, thinking off. Tasks are spread
+evenly over each test set. "Spark questions": 26 everyday assistant requests (answer and tool choice).
+
+## Generation speed (tokens/s, one request)
+
+| Variant | 2026-10-22 (before the GPU fix) | 2026-10-23 Balanced | 2026-10-23 Performance | code / prose / structured (newest) |
+|---|---|---|---|---|
+| 27B, no speculation | 12.3 | 12.1 | – | 12.1 / 12.2 / 10.6 |
+| 27B, MTP×3 | 29.6 | – | – | – |
+| 27B, MTP×4 | 31.5 | 32.4 | 32.0 | 36.8 / 25.0 / 32.0 |
+| 27B, MTP×5 | – | 33.1 | – | 39.9 / 22.8 / 33.1 |
+| 27B, DFlash2×7 | 38.0 | 36.2 | **38.5** | 52.7 / 27.7 / 38.5 |
+| 27B, DFlash2×10 | – | – | 35.1 | **64.3** / 27.0 / 35.1 |
+| 27B, DFlash2×12 | – | – | 34.8 | 64.6 / 24.1 / 34.8 |
+| **Flash-Next, MTP×4** | – | – | **59.9** | **64.5 / 46.0 / 59.9** |
+
+- **Every token reads the weights once**: ~19–21 GB at ~300 GB/s puts the 27B near 15 tokens/s without speculation
+  (12.1 measured, ~80 % of it). The GPU draws only ~20 W while generating. CPU cores would read the same memory, so
+  splitting a model between CPU and GPU brings nothing on this chip.
+- **Speculative decoding** gives 2.6–3× with MTP and up to 5.3× on code with DFlash. More DFlash draft tokens help
+  code (×10: 64 tokens/s) and hurt plain text (prose ×12: 24.1 vs 27.7 at ×7).
+- **Flash-Next** (MoE) reads only its active experts per token, a fraction of its size: nearly 2× the 27B on prose.
+
+## Reading prompts (prefill) and the prompt cache
+
+| Variant (Performance) | 1.8k tokens | 7.5k tokens | 30k tokens | same 30k prompt again |
+|---|---|---|---|---|
+| 27B MTP×4 | 0.81 s (2,296 tok/s) | 3.24 s (2,334 tok/s) | 16.4 s (1,836 tok/s) | 1.9 s |
+| 27B DFlash2×7 | 0.93 s (2,000 tok/s) | 3.24 s (2,329 tok/s) | 15.9 s (1,892 tok/s) | 15.9 s |
+| 27B DFlash2×10 | 0.88 s (2,106 tok/s) | 3.25 s (2,325 tok/s) | 15.7 s (1,919 tok/s) | 5.8 s |
+| **Flash-Next** | 0.94 s (1,988 tok/s) | 3.24 s (2,331 tok/s) | **12.6 s (2,394 tok/s)** | **0.21 s** |
+
+DFlash in this vLLM build gets (almost) no prefix-cache hits: a long conversation or an agent that sends the same
+large context again pays the full prompt reading every turn. Prompt reading is the power-limited phase (the driver
+reports "SW Power Cap" at ~50 W in Balanced).
+
+**Two presets for the 27B follow from this:**
+
+- **Fast — DFlash2×10**: chat, one-off code, short prompts. E.g. a 2k prompt + 500 tokens: ~9 s (MTP×4: ~14 s).
+- **Agents — MTP×4**: agent loops, long conversations, big repositories. E.g. one agent step with 30k context +
+  300 tokens: ~10 s (DFlash2×10: ~21 s, because the context is read again in full).
+
+## Memory, context and the 1M question
+
+| Setup | memory share | context room (KV cache) | decode |
+|---|---|---|---|
+| 27B MTP×4, default | 0.55 (62.6 GiB) | 824k tokens (262k × 3.1) | 32.0 |
+| 27B MTP×4, mid | 0.40 (45.6 GiB) | 320k tokens (131k × 2.4) | 33.3 |
+| 27B MTP×4, small | 0.35 (39.9 GiB) | 151k tokens (65k × 2.3) | 32.2 |
+| Flash-Next | 0.80 (91 GiB) | **1,054,607 tokens** (262k × 4.0) | 59.9 |
+
+- The 27B itself (weights, MTP head, working memory) needs ~35 GiB; 0.30 (34.2 GiB) does not start. A smaller share
+  costs no speed, only context room. Its limit is the model's 262,144 tokens, not memory.
+- **Context per token is small on both** because only every fourth layer has full attention (the others are linear
+  attention): 27B ~32 KiB, Flash-Next ~12 KiB per token in FP8. Flash-Next's full 262k context needs ~3 GiB.
+- **Flash-Next goes to 1M tokens**: 262k native, "extensible up to 1,000,000" with YaRN rope scaling (factor 4); its
+  n-gram embedding table stays on disk (`VLLM_PLE_TABLE_MEMORY=disk`). Whether 1M holds up on the laptop is being measured (start with `--max-model-len 1000000` and YaRN, needle tests far beyond 262k).
+- **Why Flash-Next first failed (`NV_ERR_NO_MEMORY`)**: CPU and GPU share one memory, and the NVIDIA driver takes
+  GPU memory straight from RAM. While loading, Linux keeps the 72 GB of model files it just read in its file cache;
+  the driver does not wait for Linux to drop it and fails. NVIDIA's DGX Spark recipe (262k × 4 sequences, share
+  ~0.9) therefore did not start on the laptop. Fixes: share 0.80 and dropping the model files from the file cache
+  while it loads (`posix_fadvise(POSIX_FADV_DONTNEED)`, no root needed). The first start also autotunes its kernels
+  (8 compiler processes, ~1.5 GB each, outside vLLM's share) — cached afterwards.
+
+## Quality (temperature 0, thinking off)
+
+| Model | HumanEval (40) | BFCL tools (60): simple / multiple / parallel | GSM8K (50) | Spark questions (26) | time for all 150 |
+|---|---|---|---|---|---|
+| 27B MTP×4 | 38 (95 %) | 53 (88 %): 18 / 19 / 16 | 49 (98 %) | 24–25 | 11.4 min |
+| 27B DFlash2×12 | 38 (95 %) | 53 (88 %): 18 / 19 / 16 | 48 (96 %) | 25 | **6.4 min** |
+| Flash-Next | **39 (97.5 %)** | **56 (93 %): 18 / 19 / 19** | 49 (98 %) | **26** | 7.1 min |
+
+Speculative decoding keeps the quality: between MTP×4 and DFlash2×12 the verdicts agree on 40/40 code tasks, 58/60
+tool calls and 49/50 math problems. The wording is not byte-identical (only 3/50 math answers match character for
+character): different batch shapes during verification give tiny floating-point differences that flip near-ties
+in greedy decoding.
+
+**Thinking**: both models think by default, with `reasoning_effort` `xhigh` (default), `medium` or `low` in the chat
+template. All numbers here are without thinking (as assistants and quick coding use them); with thinking, quality
+on hard tasks rises and every answer takes far longer.
+
+## On battery
+
+On battery the platform still limits the GPU to ~20 W (~1.0 GHz): prompt reading drops to ~800–930 tokens/s,
+generation stays at ~33 tokens/s with the 27B MTP×4 (bandwidth-bound). See [technical-notes.md](technical-notes.md).
