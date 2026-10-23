@@ -364,7 +364,7 @@ The IR camera works (alternating lit/dark frames from the strobing emitter, henc
   power domain on during sleep is being tested.
 - The internal mic as PipeWire graph driver derails after minutes (section 4.6).
 - GPU power on battery: under Linux the GPU stays at about 20 W on battery (nvidia-smi clocks
-  event reason "Reliability", SM ~1.0 GHz) in every power mode; on AC it reaches 37 W+. Windows
+  event reason "Reliability", SM ~1.0 GHz; measured in Performance mode); on AC it reaches 37 W+. Windows
   keeps nearly full GPU performance on battery (Notebookcheck: Cyberpunk 2077 QHD 56.2 fps on battery
   vs 56.8 fps on AC). The ASUS side is not the limit: WMI `0x00120075` (fan mode) is the only
   mode switch, `0x001200A0`/`0x001200A3` set PL2/PL1 (EC mailbox `0x28`/`0x29`) with no DC
