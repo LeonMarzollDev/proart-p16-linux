@@ -22,6 +22,22 @@ way a local assistant or coding tool uses a model.
 - **Generation is limited by memory bandwidth** (~300 GB/s, shared by CPU and GPU): more CPU cores, the GPU
   battery-cap fix or the Performance profile change it very little.
 
+## What works and what does not (yet)
+
+| Configuration | Status | Generation | Quality (code · tools · math) |
+|---|---|---|---|
+| 27B without speculation (base) | works | 12.1 tok/s | not measured separately; speculation does not change it (see Quality) |
+| 27B MTP×4 ("agents") | works, alongside other GPU users | 32.0 tok/s (2.6× base) | 95 % · 88 % · 98 % |
+| 27B MTP×3 / ×5 | works | 29.6 (10-22) / 33.1 tok/s | – |
+| 27B DFlash2×7 / ×10 ("fast") / ×12 | works | 38.5 / 35.1 / 34.8 tok/s (code up to 64.6, 5.3× base) | ×12: 95 % · 88 % · 96 % |
+| 27B with 35–40 % memory share | works, same speed, less context room | 32–33 tok/s | – |
+| **Flash-Next MTP×4, 262k, one conversation** | **works** (share 0.80, file cache dropped while loading, 3 kernel compilers, everything else paused; ~10 min start, ~13 GB free afterwards) | **59.9 tok/s** | **97.5 % · 93 % · 98 %** |
+| Flash-Next, a 123k-token prompt | works: a fact hidden in the middle found, prompt read in 60 s | – | – |
+| Flash-Next MTP×3 / ×5 / ×6 | **not yet on the laptop**: their first start autotunes new kernel shapes, RAM and swap ran out and the start was stopped. To retry right after a boot (empty swap) with share 0.75 | – | – |
+| Flash-Next without speculation | not measured (same autotuning issue) | – | – |
+| Flash-Next 1M context (YaRN ×4) | **not yet**: this nightly build's config check rejects YaRN on the multimodal config (`'Qwen4ExpConfig' object has no attribute 'max_position_embeddings'`); vLLM's rotary code itself supports YaRN with mRoPE | – | – |
+| Thinking (`reasoning_effort` xhigh / medium / low) | not measured yet | – | – |
+
 ## Setup
 
 | | |
@@ -95,13 +111,25 @@ reports "SW Power Cap" at ~50 W in Balanced).
 - **Context per token is small on both** because only every fourth layer has full attention (the others are linear
   attention): 27B ~32 KiB, Flash-Next ~12 KiB per token in FP8. Flash-Next's full 262k context needs ~3 GiB.
 - **Flash-Next goes to 1M tokens**: 262k native, "extensible up to 1,000,000" with YaRN rope scaling (factor 4); its
-  n-gram embedding table stays on disk (`VLLM_PLE_TABLE_MEMORY=disk`). Whether 1M holds up on the laptop is being measured (start with `--max-model-len 1000000` and YaRN, needle tests far beyond 262k).
+  n-gram embedding table stays on disk (`VLLM_PLE_TABLE_MEMORY=disk`). The context room is there (1.05M tokens at
+  share 0.80, ~12 GiB for 1M), but the YaRN config does not get past this nightly build's config check yet (see the
+  status table). 262k (native) works; a fact hidden in a 123k-token prompt was found, reading took 60 s.
 - **Why Flash-Next first failed (`NV_ERR_NO_MEMORY`)**: CPU and GPU share one memory, and the NVIDIA driver takes
   GPU memory straight from RAM. While loading, Linux keeps the 72 GB of model files it just read in its file cache;
   the driver does not wait for Linux to drop it and fails. NVIDIA's DGX Spark recipe (262k × 4 sequences, share
   ~0.9) therefore did not start on the laptop. Fixes: share 0.80 and dropping the model files from the file cache
-  while it loads (`posix_fadvise(POSIX_FADV_DONTNEED)`, no root needed). The first start also autotunes its kernels
-  (8 compiler processes, ~1.5 GB each, outside vLLM's share) — cached afterwards.
+  while it loads (`posix_fadvise(POSIX_FADV_DONTNEED)`, no root needed).
+- **Autotuning on a first start**: the b12x kernels are generated for the exact shapes the model uses (prompt chunk
+  sizes, 1 + MTP draft tokens per step, …); for each shape up to 256 variants (tile sizes, threads, pipeline
+  stages) are compiled on the CPU and timed on the GPU, and the fastest is cached on disk. The compilers run as
+  separate processes of ~1.5 GB each, outside vLLM's share: with 8 of them (default) a first start peaked at
+  ~110–120 GB of 122 GB and the driver failed. `B12X_COMPILE_WORKERS=3` keeps it to ~4.5 GB. A different MTP count
+  means new shapes and a new autotuning run; the cached MTP×4 configuration starts without it.
+- **Why the desktop lags near the limit**: the model's ~92 GB are GPU memory that Linux can neither move nor swap
+  out, so desktop, browser, Docker and the file cache share the remaining ~20 GB. When that gets tight, Linux drops
+  the cached code of running programs and swaps parts of them out; switching windows then waits for the SSD. The
+  kernel's pressure figure showed all processes stalled on memory ~10 % of the time. A watchdog (stop the start below
+  3 GB free RAM or 0.5 GB free swap) prevents the last step, the out-of-memory killer.
 
 ## Quality (temperature 0, thinking off)
 
