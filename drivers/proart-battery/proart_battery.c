@@ -67,9 +67,10 @@
 #define EC_POLICY_PERFORMANCE	4
 #define EC_XREG_SILENT		0x05	/* EC register, bit 0 set in silent mode */
 
-static unsigned int poll_interval = 10;
+/* the EC raises no ACPI event when the charger is (un)plugged: polling is how changes are noticed */
+static unsigned int poll_interval = 2;
 module_param(poll_interval, uint, 0644);
-MODULE_PARM_DESC(poll_interval, "Polling interval in seconds (default 10)");
+MODULE_PARM_DESC(poll_interval, "Polling interval in seconds (default 2)");
 
 static bool efi_poweroff = true;
 module_param(efi_poweroff, bool, 0444);

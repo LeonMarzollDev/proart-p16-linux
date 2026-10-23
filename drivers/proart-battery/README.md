@@ -56,7 +56,7 @@ Sleep: the Modern Standby notifications Windows sends the EC (display off `0xb7`
 audio codecs' power (speakers crackle, cs42l43 microphone/jack stays dead until a reboot).
 Without them s2idle works but draws ~11 W and the fans keep running.
 
-Module parameters: `poll_interval` (s, default 10), `hide_acpi` (default 1), `efi_poweroff` (default 1),
+Module parameters: `poll_interval` (s, default 2; the EC raises no ACPI event on (un)plugging, so this is how fast a charger change shows up), `hide_acpi` (default 1), `efi_poweroff` (default 1),
 `standby_notify` (default 0, experimental).
 The module only loads on DMI vendor `ASUS` / board `H7607BA`.
 
