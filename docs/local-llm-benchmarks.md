@@ -141,18 +141,26 @@ Each step fixed one failure seen on the way:
 | `--gpu-memory-utilization 0.80 --max-model-len 262144 --max-num-seqs 1` | at 0.88–0.91 (and 262k × 4 sequences) the driver ran out (`NV_ERR_NO_MEMORY`); 0.80 still leaves room for 1.05M tokens of context |
 | Drop the model files from the file cache while it loads (`posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED)` every few seconds, no root needed) | otherwise ~72 GB of just-read files sit in the cache, and the driver does not wait for Linux to free them |
 | `B12X_COMPILE_WORKERS=3` | a first start autotunes kernels with 8 compiler processes of ~1.5 GB each, outside vLLM's share |
+| **Drop the kernel's reclaimable caches before loading** (`echo 3 > /proc/sys/vm/drop_caches`) | **the main one**: the NVIDIA driver keeps the GPU memory of a stopped model in its system memory pool (`NVreg_EnableSystemMemoryPools`, on by default) and reports it as reclaimable. Linux counts it as available, but the driver does not hand it back fast enough when the next model loads |
 | Empty the swap before loading, if RAM has room for its content | after earlier tight loads the swap stays full of parked desktop pages; the next loading peak then has no buffer left |
 | A RAM watchdog while it loads: stop the container below 3 GB free | the last line of defence before the out-of-memory killer would hit the desktop |
 
-The swap step needs root. A narrow way: a root-owned script that does only this, and a sudo rule for exactly that file
+**The driver pool explained why every further start went worse** while the first one after a boot worked: after a
+few stopped attempts `/proc/meminfo` showed `KReclaimable: 81 GB` (with `SReclaimable`, the normal kernel caches,
+at 0.3 GB) and `MemFree: 10.8 GB`, while `MemAvailable` still said 101 GB. One `drop_caches` brought `MemFree` back
+to 113.6 GB and `KReclaimable` to 0.6 GB: as clean as right after a boot. It only drops clean pages; nothing is lost.
+
+Both steps need root. A narrow way: a root-owned script that does only this, and a sudo rule for exactly that file
 (`youruser` = your login).
 
 ```sh
 #!/bin/sh
-# /usr/local/sbin/llm-swap-reset: empty the swap before a big model loads, only when RAM has room for its pages
+# /usr/local/sbin/llm-swap-reset: memory as clean as after a boot, before a big model loads
+sync
+echo 3 > /proc/sys/vm/drop_caches                      # file cache + the NVIDIA driver's memory pool
 used=$(awk '/^SwapTotal/ {t = $2} /^SwapFree/ {f = $2} END {print t - f}' /proc/meminfo)
 avail=$(awk '/^MemAvailable/ {print $2}' /proc/meminfo)
-[ "$used" -lt 524288 ] && exit 0                       # under 0.5 GB in use: nothing to do
+[ "$used" -lt 524288 ] && exit 0                       # under 0.5 GB of swap in use: done
 [ "$avail" -gt $((used + 4194304)) ] || exit 1         # room for the swap content + 4 GB needed
 swapoff -a && swapon -a
 ```
@@ -167,8 +175,8 @@ pages back into RAM (no program is closed, nothing is lost), `swapon -a` turns t
 the model leaves the swap alone.
 
 With all of this, the cached MTP×4 configuration starts in ~10 minutes (reading and placing the weights ~7 of them).
-A first start of a different configuration (another MTP count, no speculation) autotunes again and can still run
-out of memory; best right after a boot with large programs closed.
+A first start of a different configuration (another MTP count, no speculation) autotunes again and needs more
+memory meanwhile; best with large programs closed.
 
 ## Quality (temperature 0, thinking off)
 
