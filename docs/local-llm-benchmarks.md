@@ -129,7 +129,46 @@ reports "SW Power Cap" at ~50 W in Balanced).
   out, so desktop, browser, Docker and the file cache share the remaining ~20 GB. When that gets tight, Linux drops
   the cached code of running programs and swaps parts of them out; switching windows then waits for the SSD. The
   kernel's pressure figure showed all processes stalled on memory ~10 % of the time. A watchdog (stop the start below
-  3 GB free RAM or 0.5 GB free swap) prevents the last step, the out-of-memory killer.
+  3 GB free RAM) prevents the last step, the out-of-memory killer.
+
+## Starting Flash-Next reliably on the laptop
+
+Each step fixed one failure seen on the way:
+
+| Step | Why |
+|---|---|
+| Pause everything else that holds GPU memory (here: a voice assistant with three models) | Flash-Next needs ~98 GiB of the 113.9 GiB |
+| `--gpu-memory-utilization 0.80 --max-model-len 262144 --max-num-seqs 1` | at 0.88–0.91 (and 262k × 4 sequences) the driver ran out (`NV_ERR_NO_MEMORY`); 0.80 still leaves room for 1.05M tokens of context |
+| Drop the model files from the file cache while it loads (`posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED)` every few seconds, no root needed) | otherwise ~72 GB of just-read files sit in the cache, and the driver does not wait for Linux to free them |
+| `B12X_COMPILE_WORKERS=3` | a first start autotunes kernels with 8 compiler processes of ~1.5 GB each, outside vLLM's share |
+| Empty the swap before loading, if RAM has room for its content | after earlier tight loads the swap stays full of parked desktop pages; the next loading peak then has no buffer left |
+| A RAM watchdog while it loads: stop the container below 3 GB free | the last line of defence before the out-of-memory killer would hit the desktop |
+
+The swap step needs root. A narrow way: a root-owned script that does only this, and a sudo rule for exactly that file
+(`youruser` = your login).
+
+```sh
+#!/bin/sh
+# /usr/local/sbin/llm-swap-reset: empty the swap before a big model loads, only when RAM has room for its pages
+used=$(awk '/^SwapTotal/ {t = $2} /^SwapFree/ {f = $2} END {print t - f}' /proc/meminfo)
+avail=$(awk '/^MemAvailable/ {print $2}' /proc/meminfo)
+[ "$used" -lt 524288 ] && exit 0                       # under 0.5 GB in use: nothing to do
+[ "$avail" -gt $((used + 4194304)) ] || exit 1         # room for the swap content + 4 GB needed
+swapoff -a && swapon -a
+```
+
+```
+# /etc/sudoers.d/llm-swap-reset (root, 0440; check with visudo -cf before installing)
+youruser ALL=(root) NOPASSWD: /usr/local/sbin/llm-swap-reset
+```
+
+The start script runs `sudo -n /usr/local/sbin/llm-swap-reset` before `docker run`. `swapoff -a` moves the parked
+pages back into RAM (no program is closed, nothing is lost), `swapon -a` turns the swap on again, empty; unloading
+the model leaves the swap alone.
+
+With all of this, the cached MTP×4 configuration starts in ~10 minutes (reading and placing the weights ~7 of them).
+A first start of a different configuration (another MTP count, no speculation) autotunes again and can still run
+out of memory; best right after a boot with large programs closed.
 
 ## Quality (temperature 0, thinking off)
 
