@@ -5,3 +5,5 @@ PRESS=5
 RELEASE=3
 # 0-4
 INTENSITY=3
+# overall haptic strength in percent (0-100); the touchpad's factory default is weaker
+STRENGTH=100

@@ -326,6 +326,13 @@ touchpad's event device and writes report `0x45` to its hidraw node: waveform 5 
 3 on release, intensity 3. Feature report `0x35` lists the five waveforms (ordinals 3-7) with
 durations of 13, 21, 24, 26 and 28 ms.
 
+Strength: report `0x45` (manual trigger) carries a per-waveform intensity 0-4, but the overall
+strength is the HID haptics "Intensity" feature report `0x09` (0-100 %), which Windows' touchpad
+slider sets and Linux never touches. The pad's factory value is clearly weaker than 100 %. The pad
+does not answer GET_FEATURE for it (like feature 11 at boot), but applies SET_FEATURE, so
+`proart-haptic` writes `STRENGTH` (default 100) when it opens the pad and again on the first click
+after 30 s without one (the pad may reset it in standby).
+
 ## 7. Keyboard
 
 `hid-asus` already knows `0B05:4B42` and has an OOBE-disable sequence for "ProArt P16", but sends it

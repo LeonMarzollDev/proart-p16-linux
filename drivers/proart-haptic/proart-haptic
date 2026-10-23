@@ -10,10 +10,13 @@ a click. This service plays one waveform when the click goes down and one when i
 Settings in /etc/default/proart-haptic:
   PRESS=5       waveform ordinal 3-7 on press (0 = off); the pad's waveforms last 13/21/24/26/28 ms
   RELEASE=3     waveform ordinal on release (0 = off)
-  INTENSITY=3   0-4
+  INTENSITY=3   0-4 (per waveform, report 0x45)
+  STRENGTH=100  overall haptic intensity in percent (feature report 0x09, the HID haptics "Intensity"
+                that Windows' touchpad slider sets; Linux leaves it at the factory default, which is weaker)
 Usage: proart-haptic          run (as the systemd service)
        proart-haptic test     play the waveforms 3-7 one after another
 """
+import fcntl
 import glob
 import os
 import struct
@@ -25,10 +28,12 @@ CONFIG = "/etc/default/proart-haptic"
 EV_KEY, BTN_LEFT = 0x01, 0x110
 EVENT = struct.Struct("qqHHi")  # struct input_event on 64-bit
 REPORT_TRIGGER = 0x45
+REPORT_STRENGTH = 0x09
+REAPPLY_AFTER = 30      # s without a click (e.g. standby): set the strength again, the pad may have reset it
 
 
 def settings():
-    conf = {"PRESS": 5, "RELEASE": 3, "INTENSITY": 3}
+    conf = {"PRESS": 5, "RELEASE": 3, "INTENSITY": 3, "STRENGTH": 100}
     try:
         with open(CONFIG) as f:
             for line in f:
@@ -38,6 +43,7 @@ def settings():
     except FileNotFoundError:
         pass
     conf["INTENSITY"] = min(conf["INTENSITY"], 4)
+    conf["STRENGTH"] = min(conf["STRENGTH"], 100)
     return conf
 
 
@@ -55,6 +61,12 @@ def find_devices():
     return None
 
 
+def set_strength(fd, percent):
+    """HIDIOCSFEATURE: the pad does not answer reads of this report, but it applies writes"""
+    buf = bytearray([REPORT_STRENGTH, percent])
+    fcntl.ioctl(fd, (3 << 30) | (len(buf) << 16) | (ord("H") << 8) | 0x06, buf)
+
+
 def play(fd, ordinal, intensity):
     if ordinal:
         os.write(fd, bytes([REPORT_TRIGGER, ordinal, intensity]))
@@ -63,7 +75,8 @@ def play(fd, ordinal, intensity):
 def test():
     conf = settings()
     raw, _ = find_devices() or sys.exit("touchpad not found")
-    fd = os.open(raw, os.O_WRONLY)
+    fd = os.open(raw, os.O_RDWR)
+    set_strength(fd, conf["STRENGTH"])
     print("Rest a finger lightly on the touchpad.")
     for ordinal in range(3, 8):
         time.sleep(1.5)
@@ -81,15 +94,21 @@ def run():
         conf = settings()
         raw = ev = -1
         try:
-            raw = os.open(devs[0], os.O_WRONLY)
+            raw = os.open(devs[0], os.O_RDWR)
             ev = os.open(devs[1], os.O_RDONLY)
+            set_strength(raw, conf["STRENGTH"])
             print(f"touchpad {devs[1]}, haptics {devs[0]}, press {conf['PRESS']}, "
-                  f"release {conf['RELEASE']}, intensity {conf['INTENSITY']}", flush=True)
+                  f"release {conf['RELEASE']}, intensity {conf['INTENSITY']}, "
+                  f"strength {conf['STRENGTH']} %", flush=True)
             first = True
+            last_click = time.monotonic()
             while True:
                 data = os.read(ev, EVENT.size * 64)
                 for _, _, typ, code, value in EVENT.iter_unpack(data):
                     if typ == EV_KEY and code == BTN_LEFT and value in (0, 1):
+                        if value and time.monotonic() - last_click > REAPPLY_AFTER:
+                            set_strength(raw, conf["STRENGTH"])
+                        last_click = time.monotonic()
                         play(raw, conf["PRESS"] if value else conf["RELEASE"], conf["INTENSITY"])
                         if first and value:
                             # shows in the journal whether clicks arrive when the feedback seems missing
