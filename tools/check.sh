@@ -66,6 +66,7 @@ check "speaker DSP firmware running" 'kmsg | grep -q "cs35l56.*DSP1: Firmware:"'
 check "UCM profile installed = repo (else: sudo bash install/03-audio.sh)" 'diff -rq "$REPO/config/ucm2/MediaTek/mt8901-soundwir" /usr/share/alsa/ucm2/MediaTek/mt8901-soundwir'
 check "WirePlumber names installed = repo (else: user/install-user.sh)" 'diff -q "$REPO/config/wireplumber/51-proart-names.conf" ~/.config/wireplumber/wireplumber.conf.d/51-proart-names.conf' WARN
 check "speaker sink proart_speakers" 'pw-cli ls Node | grep -q "node.name = \"proart_speakers\""'
+check "PipeWire never below 1024 samples (else the speakers xrun; user/install-user.sh)" 'pw-metadata -n settings 0 | grep -q "clock.min-quantum. value:.1024."'
 check "tweeter service" 'systemctl --user is-active proart-tweeter'
 # optional/phone-handsfree.sh
 [ -f ~/.config/systemd/user/proart-phone-bridge.service ] &&

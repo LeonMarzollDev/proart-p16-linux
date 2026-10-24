@@ -4,7 +4,8 @@
 #  - ~/.local/bin: proart-eq (tone control), proart-tweeter (tweeter routing + headphone jack),
 #                  pw-id (PipeWire node id helper), proart-fnlock (Fn-lock top-bar indicator),
 #                  ui-screenshot / ui-tree (optional desktop helpers)
-#  - PipeWire 2-way crossover "ProArt P16 Speakers", WirePlumber device names, mute kept across reboots
+#  - PipeWire 2-way crossover "ProArt P16 Speakers", minimum buffer of 1024 samples, WirePlumber device
+#    names, mute kept across reboots
 #  - environment for NVIDIA VA-API video decoding
 #  - systemd user service proart-tweeter, autostart entry for proart-fnlock
 # Requires install/03-audio.sh (and install/05-keyboard.sh for the Fn-lock indicator) to have been run first.
@@ -39,7 +40,7 @@ if [ "${1:-}" = "--remove" ]; then
 	pkill -f "$BIN/proart-fnlock" 2>/dev/null || true
 	rm -f "$AUTOSTART/proart-fnlock.desktop"
 	for t in $TOOLS; do rm -f "$BIN/$t"; done
-	rm -f "$PW/60-proart-2way.conf" "$WP/51-proart-names.conf" "$ENVD/90-nvidia-vaapi.conf" "$UNIT/proart-tweeter.service" "$WPS" \
+	rm -f "$PW/60-proart-2way.conf" "$PW/61-proart-min-quantum.conf" "$WP/51-proart-names.conf" "$ENVD/90-nvidia-vaapi.conf" "$UNIT/proart-tweeter.service" "$WPS" \
 	"$UNIT/org.gnome.Shell@.service.d/50-proart-uclamp.conf"
 	systemctl --user daemon-reload
 	restart_audio
@@ -54,6 +55,8 @@ for t in $TOOLS; do install -m 755 "$HERE/bin/$t" "$BIN/$t"; done
 echo "== 2/5 PipeWire crossover, WirePlumber names, VA-API environment"
 install -d "$PW" "$WP" "$ENVD"
 install -m 644 "$REPO/config/pipewire/60-proart-2way.conf" "$PW/"
+# the speakers fall into an xrun loop when an app takes the graph below 1024 samples (docs 4.7)
+install -m 644 "$REPO/config/pipewire/61-proart-min-quantum.conf" "$PW/"
 install -m 644 "$REPO/config/wireplumber/51-proart-names.conf" "$WP/"
 # 51-proart-names.conf hides the woofer port; the woofer amps are then switched by the UCM profile
 diff -rq "$REPO/config/ucm2/MediaTek/mt8901-soundwir" /usr/share/alsa/ucm2/MediaTek/mt8901-soundwir >/dev/null 2>&1 ||

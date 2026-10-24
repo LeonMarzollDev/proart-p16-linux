@@ -183,7 +183,22 @@ gave ~900 XRUNs per minute. What works: keep the mic and the speakers in separat
 echo filter or sink-monitor tap together with the internal mic. With a plain capture stream on the
 mic, measured over 2-3 minutes with notifications playing: 0 XRUNs, 48000 frames/s, 0 errors.
 
-### 4.7 Measurement pitfalls
+### 4.7 Never below 1024 samples
+
+PipeWire runs the whole graph at the smallest buffer any app asks for. OpenCode's attention sound
+keeps a stream open with `node.latency = 300/48000` (6 ms), which took the graph to 256 samples
+(5.3 ms). The two speaker PCMs behind the 2-way combine (`DL0` woofers, `DL1` tweeters) cannot run
+there: they went RUNNING -> SETUP/XRUN about once a second (pw-top ERR 6.7k on the woofer sink, 11.8k
+on the tweeter sink; `mod.combine-stream: out of playback buffers` in the journal only while OpenCode
+ran). Sounds crackled first, then the speakers went silent.
+
+`config/pipewire/61-proart-min-quantum.conf` sets `default.clock.min-quantum = 1024` (21 ms): such
+apps get 1024 samples instead. With the same OpenCode stream open the graph stays at 1024, both PCMs
+stay RUNNING and the error counters stay flat. To apply it without a restart:
+`pw-metadata -n settings 0 clock.min-quantum 1024`. The cost is that no app gets less than 21 ms of
+output latency, which matters only for live music software.
+
+### 4.8 Measurement pitfalls
 
 - After a PipeWire restart, WirePlumber picked the monitor of the new virtual sink as the default
   source; recordings then contained the digital signal, not the microphone. Always pass `--target`.
