@@ -31,9 +31,9 @@ way a local assistant or coding tool uses a model.
 | 27B MTP×3 / ×5 | works | 29.6 (10-22) / 33.1 tok/s | – |
 | 27B DFlash2×7 / ×10 ("fast") / ×12 | works | 38.5 / 35.1 / 34.8 tok/s (code up to 64.6, 5.3× base) | ×12: 95 % · 88 % · 96 % |
 | 27B with 35–40 % memory share | works, same speed, less context room | 32–33 tok/s | – |
-| **Flash-Next MTP×4, 262k, one conversation** | **works** (share 0.80, file cache dropped while loading, 3 kernel compilers, everything else paused; ~10 min start, ~13 GB free afterwards) | **59.9 tok/s** | **97.5 % · 93 % · 98 %** |
+| **Flash-Next MTP×4, 262k, one conversation** | **works, reliably** (share 0.76, `expandable_segments` allocator, file cache dropped while loading, 3 kernel compilers, everything else paused; ~10 min start, ~19 GiB free afterwards) | **59.9 tok/s** (re-check 10-24: code 65.8, prose 46.8) | **97.5 % · 93 % · 98 %** |
 | Flash-Next, a 123k-token prompt | works: a fact hidden in the middle found, prompt read in 60 s | – | – |
-| Flash-Next MTP×3 / ×5 / ×6 | **not yet on the laptop**: their first start autotunes new kernel shapes, RAM and swap ran out and the start was stopped. To retry right after a boot (empty swap) with share 0.75 | – | – |
+| Flash-Next MTP×3 / ×5 / ×6 | **not yet on the laptop**: their first start autotunes new kernel shapes, RAM and swap ran out and the start was stopped. Tried before the allocator fix below; to retry with it | – | – |
 | Flash-Next without speculation | not measured (same autotuning issue) | – | – |
 | Flash-Next 1M context (YaRN ×4) | **not yet**: this nightly build's config check rejects YaRN on the multimodal config (`'Qwen4ExpConfig' object has no attribute 'max_position_embeddings'`); vLLM's rotary code itself supports YaRN with mRoPE | – | – |
 | Thinking (`reasoning_effort` xhigh / medium / low) | not measured yet | – | – |
@@ -104,7 +104,8 @@ reports "SW Power Cap" at ~50 W in Balanced).
 | 27B MTP×4, default | 0.55 (62.6 GiB) | 824k tokens (262k × 3.1) | 32.0 |
 | 27B MTP×4, mid | 0.40 (45.6 GiB) | 320k tokens (131k × 2.4) | 33.3 |
 | 27B MTP×4, small | 0.35 (39.9 GiB) | 151k tokens (65k × 2.3) | 32.2 |
-| Flash-Next | 0.80 (91 GiB) | **1,054,607 tokens** (262k × 4.0) | 59.9 |
+| Flash-Next, first working start | 0.80 (91 GiB) | **1,054,607 tokens** (262k × 4.0) | 59.9 |
+| Flash-Next, now (`expandable_segments`) | 0.76 (86.6 GiB) | 390,444 tokens (262k × 1.5; 7.34 GiB) | 59.9 |
 
 - The 27B itself (weights, MTP head, working memory) needs ~35 GiB; 0.30 (34.2 GiB) does not start. A smaller share
   costs no speed, only context room. Its limit is the model's 262,144 tokens, not memory.
@@ -118,7 +119,8 @@ reports "SW Power Cap" at ~50 W in Balanced).
   GPU memory straight from RAM. While loading, Linux keeps the 72 GB of model files it just read in its file cache;
   the driver does not wait for Linux to drop it and fails. NVIDIA's DGX Spark recipe (262k × 4 sequences, share
   ~0.9) therefore did not start on the laptop. Fixes: share 0.80 and dropping the model files from the file cache
-  while it loads (`posix_fadvise(POSIX_FADV_DONTNEED)`, no root needed).
+  while it loads (`posix_fadvise(POSIX_FADV_DONTNEED)`, no root needed). That start was lucky, though: see the
+  repacking peak below.
 - **Autotuning on a first start**: the b12x kernels are generated for the exact shapes the model uses (prompt chunk
   sizes, 1 + MTP draft tokens per step, …); for each shape up to 256 variants (tile sizes, threads, pipeline
   stages) are compiled on the CPU and timed on the GPU, and the fastest is cached on disk. The compilers run as
@@ -137,13 +139,16 @@ Each step fixed one failure seen on the way:
 
 | Step | Why |
 |---|---|
-| Pause everything else that holds GPU memory (here: a voice assistant with three models) | Flash-Next needs ~98 GiB of the 113.9 GiB |
-| `--gpu-memory-utilization 0.80 --max-model-len 262144 --max-num-seqs 1` | at 0.88–0.91 (and 262k × 4 sequences) the driver ran out (`NV_ERR_NO_MEMORY`); 0.80 still leaves room for 1.05M tokens of context |
+| Pause everything else that holds GPU memory (here: a voice assistant with three models) | Flash-Next needs ~87 GiB of the 113.9 GiB |
+| `--gpu-memory-utilization 0.76 --max-model-len 262144 --max-num-seqs 1` | at 0.88–0.91 (and 262k × 4 sequences) the driver ran out (`NV_ERR_NO_MEMORY`); 0.76 leaves room for 390k tokens (one full 262k conversation) and ~19 GiB of RAM for the desktop |
+| **`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`** | **the main one**: right after the weights are read, vLLM repacks the MoE expert weights into the b12x kernel layout. With PyTorch's default allocator the freed pieces pile up: +21 GiB at once, then +0.15 GiB/s, past 100 GiB, and the start failed even from a clean memory state. With expandable segments, freed GPU memory is reused: the same phase peaks at ~83 GiB, same speed afterwards |
 | Drop the model files from the file cache while it loads (`posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED)` every few seconds, no root needed) | otherwise ~72 GB of just-read files sit in the cache, and the driver does not wait for Linux to free them |
 | `B12X_COMPILE_WORKERS=3` | a first start autotunes kernels with 8 compiler processes of ~1.5 GB each, outside vLLM's share |
-| **Drop the kernel's reclaimable caches before loading** (`echo 3 > /proc/sys/vm/drop_caches`) | **the main one**: the NVIDIA driver keeps the GPU memory of a stopped model in its system memory pool (`NVreg_EnableSystemMemoryPools`, on by default) and reports it as reclaimable. Linux counts it as available, but the driver does not hand it back fast enough when the next model loads |
+| **Drop the kernel's reclaimable caches before loading** (`echo 3 > /proc/sys/vm/drop_caches`) | the NVIDIA driver keeps the GPU memory of a stopped model in its system memory pool (`NVreg_EnableSystemMemoryPools`, on by default) and reports it as reclaimable. Linux counts it as available, but the driver does not hand it back fast enough when the next model loads |
 | Empty the swap before loading, if RAM has room for its content | after earlier tight loads the swap stays full of parked desktop pages; the next loading peak then has no buffer left |
 | A RAM watchdog while it loads: stop the container below 3 GB free | the last line of defence before the out-of-memory killer would hit the desktop |
+| A memory log while it loads (every 5 s: available, free, `KReclaimable`, swap, the container's cgroup memory, last log line) | how the repacking peak above was found |
+| **Unloading frees it too**: run the same script after stopping a model (or the voice assistant) | otherwise the driver pool keeps the stopped model's memory (71 GB of Flash-Next, 15 GB of the assistant); the assistant's small model then failed to start (`No available memory for the cache blocks`) and the desktop showed ~30 GB used with everything off |
 
 **The driver pool explained why every further start went worse** while the first one after a boot worked: after a
 few stopped attempts `/proc/meminfo` showed `KReclaimable: 81 GB` (with `SReclaimable`, the normal kernel caches,
@@ -170,11 +175,22 @@ swapoff -a && swapon -a
 youruser ALL=(root) NOPASSWD: /usr/local/sbin/llm-swap-reset
 ```
 
-The start script runs `sudo -n /usr/local/sbin/llm-swap-reset` before `docker run`. `swapoff -a` moves the parked
-pages back into RAM (no program is closed, nothing is lost), `swapon -a` turns the swap on again, empty; unloading
-the model leaves the swap alone.
+The start script runs `sudo -n /usr/local/sbin/llm-swap-reset` before `docker run`, and again after stopping a
+model (also when a start fails) and after switching the voice assistant off. `swapoff -a` moves the parked
+pages back into RAM (no program is closed, nothing is lost), `swapon -a` turns the swap on again, empty: the swap is
+never left off.
 
 With all of this, the cached MTP×4 configuration starts in ~10 minutes (reading and placing the weights ~7 of them).
+The memory log of two starts (GiB; voice assistant off, desktop with four displays):
+
+| Phase | available RAM | model container (cgroup) |
+|---|---|---|
+| before loading | 105 | – |
+| weights being read (their GPU memory is reserved in the first minute) | 34 → 29 | 70 → 73 |
+| repacking, default allocator (failed) | 25 → 2.6, 8 GiB swap full | 78 → 101.5, still rising |
+| repacking, `expandable_segments` | 31 → 24, swap unused | 73 → 83 |
+| ready (KV cache allocated) | 18.5 | 86 |
+
 A first start of a different configuration (another MTP count, no speculation) autotunes again and needs more
 memory meanwhile; best with large programs closed.
 
