@@ -9,14 +9,14 @@ way a local assistant or coding tool uses a model.
 
 | Model / preset | Generation | 30k prompt: new / again | Quality (code · tools · math) | Needs |
 |---|---|---|---|---|
-| **Qwen3.8 Flash-Next** (MoE, MTP×4) | **59.9 tok/s** (code 64.5) | **12.6 s / 0.2 s** | **97.5 % · 93 % · 98 %** | ~98 GiB: everything else must pause; 8–10 min start |
+| **Qwen3.8 Flash-Next** (MoE, MTP×3) | **~60 tok/s** (code 62–65) | **12.3 s / 0.15 s** | **97.5 % · 93 % · 98 %** | ~87 GiB: everything else must pause; ~5 min start |
 | Qwen3.8 27B, DFlash2×10 ("fast") | 35.1 tok/s (code 64.3) | 15.7 s / 5.8 s | 95 % · 88 % · 96 % (×12) | ~45–63 GiB |
 | Qwen3.8 27B, MTP×4 ("agents") | 32.0 tok/s (code 36.8) | 16.4 s / 1.9 s | 95 % · 88 % · 98 % | ~40–63 GiB |
 
 - **Flash-Next is the fastest in every measurement** (generation ~1.7–1.9×, prompt reading at 30k ~1.3×, a cached
   prompt ~9× faster) because only 10 of its 512 experts run per token, **and at least as good on every quality
   test** (better on tool calls, especially parallel ones: 19 vs 16 of 20). It needs nearly all of the memory
-  (anything else that uses the GPU must pause) and a start takes ~10 minutes.
+  (anything else that uses the GPU must pause) and a start takes ~5 minutes.
 - **For the 27B, speculative decoding is the lever**: 12 → 32–38 tokens/s. DFlash is fastest on output but this vLLM
   build reads every prompt again in full; MTP keeps the prompt cache, which wins for agents and long conversations.
 - **Generation is limited by memory bandwidth** (~300 GB/s, shared by CPU and GPU): more CPU cores, the GPU
@@ -31,9 +31,9 @@ way a local assistant or coding tool uses a model.
 | 27B MTP×3 / ×5 | works | 29.6 (10-22) / 33.1 tok/s | – |
 | 27B DFlash2×7 / ×10 ("fast") / ×12 | works | 38.5 / 35.1 / 34.8 tok/s (code up to 64.6, 5.3× base) | ×12: 95 % · 88 % · 96 % |
 | 27B with 35–40 % memory share | works, same speed, less context room | 32–33 tok/s | – |
-| **Flash-Next MTP×4, 262k, one conversation** | **works, reliably** (share 0.76, `expandable_segments` allocator, file cache dropped while loading, 3 kernel compilers, everything else paused; ~10 min start, ~19 GiB free afterwards) | **59.9 tok/s** (re-check 10-24: code 65.8, prose 46.8) | **97.5 % · 93 % · 98 %** |
+| **Flash-Next MTP×3 (default) / ×4, 262k, one conversation** | **works, reliably** (share 0.76, `expandable_segments` allocator, file cache dropped while loading, 3 kernel compilers, everything else paused; ~10 min start, ~19 GiB free afterwards) | **59.9 tok/s** (re-check 10-24: code 65.8, prose 46.8) | **97.5 % · 93 % · 98 %** |
 | Flash-Next, a 123k-token prompt | works: a fact hidden in the middle found, prompt read in 60 s | – | – |
-| Flash-Next MTP×3 / ×5 / ×6 | **not yet on the laptop**: their first start autotunes new kernel shapes, RAM and swap ran out and the start was stopped. Tried before the allocator fix below; to retry with it | – | – |
+| Flash-Next MTP×2 / ×3 / ×5 / ×6 | works since the fixes below (first start of each autotunes, ~5–6 min) | median 58.0 / 60.2 / 57.6 / 55.0 tok/s | Spark questions 25–26/26 on all |
 | Flash-Next without speculation | not measured (same autotuning issue) | – | – |
 | Flash-Next 1M context (YaRN ×4) | **not yet**: this nightly build's config check rejects YaRN on the multimodal config (`'Qwen4ExpConfig' object has no attribute 'max_position_embeddings'`); vLLM's rotary code itself supports YaRN with mRoPE | – | – |
 | Thinking (`reasoning_effort` xhigh / medium / low) | not measured yet | – | – |
@@ -70,6 +70,10 @@ evenly over each test set. "Spark questions": 26 everyday assistant requests (an
 | 27B, DFlash2×10 | – | – | 35.1 | **64.3** / 27.0 / 35.1 |
 | 27B, DFlash2×12 | – | – | 34.8 | 64.6 / 24.1 / 34.8 |
 | **Flash-Next, MTP×4** | – | – | **59.9** | **64.5 / 46.0 / 59.9** |
+| Flash-Next, MTP×2 (10-24) | – | – | 58.0 | 60.8 / **48.1** / 58.0 |
+| **Flash-Next, MTP×3 (10-24, default)** | – | – | **60.2** | **65.5** / 45.7 / **60.2** |
+| Flash-Next, MTP×5 (10-24) | – | – | 57.6 | 64.2 / 41.1 / 57.6 |
+| Flash-Next, MTP×6 (10-24) | – | – | 55.0 | 61.9 / 35.9 / 55.0 |
 
 - **Every token reads the weights once**: ~19–21 GB at ~300 GB/s puts the 27B near 15 tokens/s without speculation
   (12.1 measured, ~80 % of it). The GPU draws only ~20 W while generating. CPU cores would read the same memory, so
@@ -77,6 +81,10 @@ evenly over each test set. "Spark questions": 26 everyday assistant requests (an
 - **Speculative decoding** gives 2.6–3× with MTP and up to 5.3× on code with DFlash. More DFlash draft tokens help
   code (×10: 64 tokens/s) and hurt plain text (prose ×12: 24.1 vs 27.7 at ×7).
 - **Flash-Next** (MoE) reads only its active experts per token, a fraction of its size: nearly 2× the 27B on prose.
+- **Flash-Next's MTP draft count**: more drafted tokens help code a little up to ×3–×4 and hurt prose (the drafts
+  are rejected more often: 48.1 at ×2, 35.9 at ×6). Four runs each of ×3 and ×4 with the desktop in normal use:
+  ×3 62.6 / 45.0 / 56.5, ×4 61.1 / 41.9 / 57.8 (code / prose / structured), so ×3 is the default. Single runs
+  scatter by ±5 % while other programs are busy: the decode loop is one CPU thread.
 
 ## Reading prompts (prefill) and the prompt cache
 
@@ -139,7 +147,9 @@ Each step fixed one failure seen on the way:
 
 | Step | Why |
 |---|---|
-| Pause everything else that holds GPU memory (here: a voice assistant with three models) | Flash-Next needs ~87 GiB of the 113.9 GiB |
+| Pause everything else that holds GPU memory (here: a voice assistant with three models), and refuse to start it again while the model runs | Flash-Next needs ~87 GiB of the 113.9 GiB |
+| **GPU access via CDI**: `--device nvidia.com/gpu=all` instead of `--gpus all` | with `--gpus all` the NVIDIA hook adds the GPU devices behind Docker's back: the container's systemd unit lists none of them, and every systemd reload (a snap refresh, the daily apt upgrade) or `docker update` takes the GPU away from running containers (`NVMLError_Unknown`, CUDA `operation not permitted`). With CDI (the spec is generated at boot by `nvidia-cdi-refresh`) the devices are part of the unit. Never `docker update` a running GPU container |
+| **Pin the container to the fast CPU cores** (`--cpuset-cpus`, here the 10 Cortex-X925; the 10 A725 run at 2.8 GHz) | reading the weights is one Python thread that routes 375,487 tensors (368,640 expert pieces), and Linux kept moving it to the slow cores: 33 s per 5 GB shard, pinned 10–15 s. Weights 445 → 146 s, engine setup 133 → 52 s |
 | `--gpu-memory-utilization 0.76 --max-model-len 262144 --max-num-seqs 1` | at 0.88–0.91 (and 262k × 4 sequences) the driver ran out (`NV_ERR_NO_MEMORY`); 0.76 leaves room for 390k tokens (one full 262k conversation) and ~19 GiB of RAM for the desktop |
 | **`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`** | **the main one**: right after the weights are read, vLLM repacks the MoE expert weights into the b12x kernel layout. With PyTorch's default allocator the freed pieces pile up: +21 GiB at once, then +0.15 GiB/s, past 100 GiB, and the start failed even from a clean memory state. With expandable segments, freed GPU memory is reused: the same phase peaks at ~83 GiB, same speed afterwards |
 | Drop the model files from the file cache while it loads (`posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED)` every few seconds, no root needed) | otherwise ~72 GB of just-read files sit in the cache, and the driver does not wait for Linux to free them |
@@ -180,7 +190,8 @@ model (also when a start fails) and after switching the voice assistant off. `sw
 pages back into RAM (no program is closed, nothing is lost), `swapon -a` turns the swap on again, empty: the swap is
 never left off.
 
-With all of this, the cached MTP×4 configuration starts in ~10 minutes (reading and placing the weights ~7 of them).
+With all of this, the cached MTP×3/×4 configuration starts in ~5 minutes (before the CPU pinning ~10): 2.5 min
+reading the weights, ~40 s repacking, ~1 min kernels, profiling and CUDA graphs.
 The memory log of two starts (GiB; voice assistant off, desktop with four displays):
 
 | Phase | available RAM | model container (cgroup) |
