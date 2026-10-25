@@ -11,6 +11,7 @@
     "Multiblock": "1",
     "SMCChecks": "1",
     "MonoHacks": "1",
-    "DiskCache": "1"
+    "DiskCache": "1",
+    "DiskCacheMaxFileSize": "8589934592"
   }
 }

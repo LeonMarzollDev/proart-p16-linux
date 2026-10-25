@@ -77,6 +77,27 @@ What had to change on the N1X:
 Tried and dropped: Wine's native Wayland driver (`HKCU\Software\Wine\Drivers\Graphics=wayland`) - the
 launcher aborted with `FATAL:ui\gfx\win\hwnd_util.cc:65] 1400`.
 
+### Easy Anti-Cheat: the game itself does not run yet (status 2026-10-25)
+
+With the official FEX the game never gets past Easy Anti-Cheat: the EAC bootstrapper downloads its Linux module
+and then spins at `Starting Wine module mapping` forever. EAC injects its client into the game with `ptrace`
+(reading x86 registers, planting `int3`, ~530 calls) and keeps rewriting its own code; under FEX the tracer sees
+aarch64 registers and FEX's own syscall stops, and the code rewriting keeps FEX in self-modifying-code faults.
+The lug-wine runner (its EAC support: `EAC_LAUNCHERDIR`, `/tmp/eac_wine_pid_*`) is needed as well; Kron4ek's
+build only has Proton's older `PROTON_EAC_RUNTIME` path.
+
+Tried once, and reverted: FEX 2610 with the community fidelity patches
+([StonkGuy/eac-arm64-emulation-poc](https://github.com/StonkGuy/eac-arm64-emulation-poc), tag `eac-2610.3`). With them
+EAC loaded in 3 s (`Launcher finished with: 301, 'Easy Anti-Cheat successfully loaded in-game'`) and the game ran
+in the Persistent Universe (GPU 80 %, ~48 GB RAM). It also needed: the x86-64 NVIDIA user-space driver from the
+Steam snap (that build has no thunks), and a small Vulkan layer that reports the GPU as discrete (Star Citizen
+4.10 picks an empty device for an "integrated" NVIDIA GPU: `Chosen Vulkan GPU Device () ... (0.0.0)`) and hides
+`VK_NVX_binary_import`/`VK_NVX_image_view_handle` (DLSS; with them the driver starts CUDA, which finds no address
+range, and `vkCreateDevice` fails with `0xFFFFFFFD`, as on x86 Linux:
+[starcitizen-nobara-fix](https://github.com/nofea/starcitizen-nobara-fix)). DirectX 11 is no longer an option in 4.10.
+The patch author warns that an anti-cheat may treat an emulated CPU as a violation (account risk); this setup was
+removed again. Revisit when the patches are in upstream FEX or the game supports this platform.
+
 ### Launcher responsiveness: what made it lag, and the fixes
 
 The RSI Launcher is an Electron (Chromium) app. Hovers and clicks reacted after up to a second, its videos
