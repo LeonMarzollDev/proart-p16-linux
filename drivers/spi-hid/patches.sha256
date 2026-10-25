@@ -1,0 +1,8 @@
+a26e5a13d093e91969b98b5f969c635e6bd3118c847ede42ec0f83dbdbf043a6  2112-HID-spi-hid-add-transport-driver-skeleton-for-HID-ov.patch
+a5664d88d81da2aae289a4a0287f22ef4eeb71270614edbee2573fea11fcb0d8  2113-HID-spi-hid-add-spi-hid-driver-HID-layer.patch
+7464f35463265edfef4106767ae906b440b1dc217869ecb64e2f2ab6bfee19db  2114-HID-spi-hid-add-HID-SPI-protocol-implementation.patch
+d09050a74e20ef20730febde750491b646210a5fa95254cd6dc6b1115a36846e  2115-HID-spi_hid-add-spi_hid-traces.patch
+81cdaf4977af84abebe9e5ed57b7e632ded834620a0c953d9df691297540e66c  2116-HID-spi_hid-add-ACPI-support-for-SPI-over-HID.patch
+d8e3f549e0a5705ef3877f91d7bb8b3b727f9d8d4806c955be988f7d2fe9d0db  2117-HID-spi_hid-add-device-tree-support-for-SPI-over-HID.patch
+4c56326fa72421bec2232cb86081a9857d1f5cc37f98ba790bdbbbce563f134e  2119-HID-spi-hid-add-power-management-implementation.patch
+bdc0203ae6ecce9c71ef8a6ce710ea4bd214e1d51b8ea97df4e79925ddc3cfcc  2120-HID-spi-hid-add-panel-follower-support.patch
