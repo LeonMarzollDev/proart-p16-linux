@@ -87,16 +87,20 @@ issue), so some fixes may help there too - reports welcome.
 | Phone calls via a paired phone | - | GNOME Calls rings, answers, dials; call audio on the laptop; mute button (`optional/phone-handsfree.sh`) |
 | Webcam, IR camera | works | works; 50 Hz anti-flicker; optional face login (Howdy: login, lock screen, sudo, optionally admin dialogs) |
 | USB-C, second M.2 slot | works / slot empty | unchanged (second slot: 2280, single-sided SSDs only per ASUS) |
-| Suspend (s2idle) | "deep" sleep never wakes up | wakes up reliably; **open:** after sleeps of more than a few minutes the internal mic stays silent and the speakers crackle until a reboot (audio state the firmware sets at boot is lost; under investigation), and the fans keep running while asleep |
+| Suspend (s2idle) | "deep" sleep never wakes up | wakes up reliably. **Fixes pending hardware test:** fans keep running while asleep -> `proart_s2idle` calls the Modern Standby `_DSM` of `\_SB.PEPD`, which arm64 Linux never evaluates (`install/15-s2idle.sh`); mic silent / speakers crackling after long sleeps -> SoundWire clock parents are never selected on Linux, patched `soundwire-mtk` DKMS + resume hook ([`patches/audio`](patches/audio), `PROART_SDW_DKMS=1 install/03-audio.sh`) |
 | Haptic touchpad feedback | no vibration on click | click felt on press and release (`proart-haptic.service`, strength adjustable) |
-| Battery through ACPI | - | **not working**: the EC echoes the ACPI requests; `proart_battery` is the workaround |
+| Battery through ACPI | - | BIOS .300: **not working** (its AML stores the FF-A answer into a `Local`, so every EC method reads its own request back). BIOS **.303 fixes the AML**: with linux-nvidia >= 1022 the stock ACPI battery/AC should work; `proart_battery` 2.0 detects this (`mode=auto`) and keeps only what ACPI lacks (charge limit, PSYS/PSOC). Pending hardware test |
 | Dolby Atmos | - | **not available** on Linux; EasyEffects presets as an approximation |
+| USB4 / Thunderbolt tunnels (docks' PCIe/Ethernet, eGPU, Thunderbolt-only displays) | - | **not working**: the `NVDA8100` host routers are ACPI devices the thunderbolt driver does not handle; needs kernel-core patches (as Omarchy's 1070-1089) in linux-nvidia, not DKMS. USB-C DP alt-mode and USB work |
+| Ambient light sensor | - | experimental: `MSFW1111` sensor hub on SPI needs HID-over-SPI (not upstream yet), `install/14-sensors.sh` |
+| NPU (`NVDA200A`, NVDLA) | - | **no Linux driver** exists |
+| Hibernate | - | **not available**: linux-nvidia arm64 is built without `CONFIG_HIBERNATION` |
 
 ## Tested versions
 
 | | |
 |---|---|
-| Laptop | ASUS ProArt P16 H7607BA, BIOS H7607BA.300 (2026-08-11) |
+| Laptop | ASUS ProArt P16 H7607BA, BIOS H7607BA.300 (2026-08-11); BIOS .303 (2026-09-22) analysed from its ACPI tables, not yet run |
 | OS | Ubuntu 26.04 LTS (resolute), GNOME 50 on Wayland |
 | Kernel | `linux-nvidia` 7.0.0-1023.24 (resolute-proposed) with `acpi_osi="!Windows 2022"` |
 | NVIDIA | 615.71.09 open kernel modules (prebuilt), nvidia-vaapi-driver 0.0.14 |
@@ -120,7 +124,13 @@ sudo bash install/08-camera.sh        # webcam anti-flicker 50 Hz (skip on 60 Hz
 sudo bash install/09-snap-gpu.sh      # NVIDIA EGL for snap apps (otherwise they render on the CPU)
 sudo bash install/10-power.sh         # only for earlier installs: removes the PCIe ASPM setting
 sudo bash install/11-protect.sh       # keeps the setup across Ubuntu updates (UCM diversion, apt hook)
+sudo bash install/12-display.sh       # ASUS panel colour profile, brightness/HDR checks
+sudo bash install/14-sensors.sh       # ambient light sensor (spi-hid DKMS, sensor hub on SPI) - experimental
+sudo bash install/15-s2idle.sh        # proart_s2idle: Modern Standby _DSM on suspend (fans off while asleep)
+sudo bash install/17-secure-boot.sh   # Secure Boot on: create/enroll the MOK and sign all DKMS modules
+sudo bash install/18-firmware.sh      # fwupd + ESRT firmware inventory
 sudo reboot
+# optional: sudo bash install/13-dgx-stack.sh  # DGX OS-like stack: CUDA, cuDNN, NCCL, container toolkit, Docker
 user/install-user.sh                  # as your user: speaker crossover, tweeter service, names, VA-API env,
                                       #   Fn-lock top-bar indicator
 ```

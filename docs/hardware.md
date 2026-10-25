@@ -22,7 +22,7 @@ Tested unit: BIOS `H7607BA.300` (2026-08-11), DMI product family `ProArt P16`, b
 | `NVDA9221` (GIO0) | GPIO / interrupts | `pinctrl_mt8901` (built-in) |
 | `NVDA0210` | SPI | `spi-mt65xx` |
 | `NVDA0240` (COM1-3) | UARTs (hidden from "Windows 2022") | `8250_mtk` |
-| `NVDA6210` (PEPD) | device power control (SCMI) | `power_wrap_drv` |
+| `NVDA6210` (PEPD, `_CID PNP0D80`) | device power control (SCMI); Modern Standby `_DSM` 11e00d56 (functions 3-9 -> EC 0xb7/0xb8/0xae/0xaf/0x9a/0x9b) | `power_wrap_drv`; `_DSM` called by `proart_s2idle` (arm64 Linux never calls it) |
 | `NVDA8400` (SSPM) | SCMI transport; `_STA` = 0 when `_OSI("Windows 2022")` | `sspm_ci` |
 
 ## Input
@@ -61,8 +61,8 @@ MT8901 routing used by the UCM profile (`HiFi-cs42l43-cs35l56x2.conf`):
 |---|---|---|
 | `ARML0002` (FFA0) | Arm FF-A, FFH operation region (offset 2) | bound by `nvidia-ffa`; `_DEP` of BAT0 |
 | `ACPI0004` (EC0) | ASUS EC methods (`RRA9`, `RWEC`, `GBST`) over FF-A | UUID `884a63a0-3285-4120-83aa-eec008a0a546`, partition `0x8003` |
-| `PNP0C0A` (BAT0) | battery | static data from shared memory `\_SB.B0DC/B0FC/B0DV`; live data broken -> `proart_battery` |
-| `ACPI0003` (AC0) | AC adapter | `_PSR` broken -> `proart_battery` (`ADP1`) |
+| `PNP0C0A` (BAT0) | battery | static data from shared memory `\_SB.B0DC/B0FC/B0DV`; live data broken on BIOS .300 (AML buffer bug), expected to work on .303 -> `proart_battery` picks |
+| `ACPI0003` (AC0) | AC adapter | `_PSR` broken on .300 -> `proart_battery` (`ADP1`); expected to work on .303 |
 | `USBC000` | UCSI (3 USB-C ports) | `ucsi_acpi` |
 
 FF-A partitions seen: `0x8001` (TPM CRB), `0x8002`, `0x8003` (EC services: management `330c1273`,

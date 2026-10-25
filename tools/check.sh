@@ -103,6 +103,75 @@ check "GPU battery cap off (RMSkipACPIBattCap, install/02-nvidia.sh)" 'grep -q "
 check "snap EGL shim" 'test -f /usr/share/glvnd/egl_vendor.d/09_nvidia_snap.json -a -f /usr/lib/aarch64-linux-gnu/libnvidia-snap-egl.so'
 check "VA-API environment" 'test -f ~/.config/environment.d/90-nvidia-vaapi.conf' WARN
 
+echo "== Display (OLED panel)"
+bl=$(ls /sys/class/backlight 2>/dev/null | head -1)
+[ -n "$bl" ] && OK "panel brightness control ($bl: $(cat /sys/class/backlight/$bl/brightness)/$(cat /sys/class/backlight/$bl/max_brightness))" ||
+	WARN "no backlight device: the brightness slider cannot work (docs/hardware-extra.md)"
+[ -d /usr/share/color/icc/asus-proart-p16 ] && OK "ASUS factory colour profiles installed ($(ls /usr/share/color/icc/asus-proart-p16 | wc -l))" ||
+	WARN "no ASUS colour profile (optional: install/12-display.sh)"
+command -v gdctl >/dev/null &&
+	check "HDR offered for the internal panel (GNOME Settings > Displays)" 'gdctl show 2>/dev/null | grep -qi bt2100' WARN
+
+echo "== Sensors"
+check "webcam presence sensor (iio prox)" 'grep -qx prox /sys/bus/iio/devices/iio:device*/name' WARN
+if dkms status spi-hid 2>/dev/null | grep -q installed; then
+	check "ambient light sensor (spi-hid + hid-sensor-als, install/14-sensors.sh)" 'ls /sys/bus/iio/devices/iio:device*/in_illuminance_* '
+	check "iio-sensor-proxy offers the light sensor to GNOME" 'gdbus call --system --dest net.hadess.SensorProxy --object-path /net/hadess/SensorProxy --method org.freedesktop.DBus.Properties.Get net.hadess.SensorProxy HasAmbientLight | grep -q true' WARN
+else
+	WARN "ambient light sensor not set up (HID over SPI; optional: install/14-sensors.sh, unverified)"
+fi
+
+echo "== USB-C, USB4, card reader"
+check "USB-C ports in the Type-C class (UCSI)" 'test -e /sys/class/typec/port0'
+# NVDA8100 host routers are ACPI platform devices; stock linux-nvidia has no driver for them
+check "USB4/Thunderbolt host routers bound (docks, eGPU, Thunderbolt displays)" 'ls -d /sys/bus/thunderbolt/devices/domain*' WARN
+check "SD reader GL9767 bound to sdhci-pci" 'lspci -k -d 17a0:9767 | grep -q "in use: sdhci-pci"' WARN
+
+echo "== Memory, security, firmware"
+mt=$(awk '/^MemTotal/ {print int($2 / 1048576)}' /proc/meminfo)
+[ "${mt:-0}" -ge 100 ] && OK "$mt GiB RAM visible" ||
+	WARN "only ${mt} GiB RAM visible: the firmware's GPU carve-out is not reclaimed (docs/hardware-extra.md)"
+check "TPM 2.0 (tpm_crb over FF-A)" 'test -c /dev/tpmrm0' WARN
+if mokutil --sb-state 2>/dev/null | grep -q 'SecureBoot enabled'; then
+	check "Secure Boot: DKMS key (MOK) enrolled (install/17-secure-boot.sh)" 'mokutil --test-key /var/lib/shim-signed/mok/MOK.der 2>&1 | grep -q "already enrolled"'
+	for m in proart_battery proart_audio hid_asus spi_hid_acpi; do
+		modinfo -F filename $m 2>/dev/null | grep -q /updates/ || continue
+		check "Secure Boot: $m is signed" "[ -n \"\$(modinfo -F sig_key $m)\" ]"
+	done
+else
+	OK "Secure Boot off (unsigned DKMS modules load)"
+fi
+check "firmware update table (ESRT) visible to fwupd" 'test -d /sys/firmware/efi/esrt/entries/entry0' WARN
+
+echo "== DGX stack (install/13-dgx-stack.sh, optional)"
+if [ -f /etc/apt/sources.list.d/proart-cuda.sources ]; then
+	OK "CUDA repository: $(awk '/^URIs:/{print $2}' /etc/apt/sources.list.d/proart-cuda.sources)"
+	check "CUDA repo cannot replace the display driver (pin -1)" 'grep -q "Pin-Priority: -1" /etc/apt/preferences.d/proart-cuda'
+	# the driver must keep coming from the Ubuntu archive (prebuilt for linux-nvidia)
+	dpkg -s libnvidia-compute >/dev/null 2>&1 &&
+		FAIL "NVIDIA driver libraries from the CUDA repo are installed (libnvidia-compute): the archive driver was replaced" ||
+		OK "NVIDIA driver from the Ubuntu archive ($(dpkg-query -W -f='${Package} ' 'nvidia-utils-*' 2>/dev/null))"
+	NVCC=$(ls /usr/local/cuda/bin/nvcc 2>/dev/null || ls /usr/local/cuda-*/bin/nvcc 2>/dev/null | sort -V | tail -1)
+	[ -n "$NVCC" ] && OK "CUDA toolkit $("$NVCC" --version | sed -n 's/.*release \([0-9.]*\).*/\1/p')" || WARN "CUDA toolkit not installed"
+	command -v nvcc >/dev/null || [ -z "$NVCC" ] || WARN "nvcc not in PATH (log in again; /etc/profile.d/proart-cuda.sh)"
+	ldconfig -p | grep -q libcudnn.so.9 && OK "cuDNN 9" || WARN "cuDNN not installed"
+	ldconfig -p | grep -q libnccl.so.2 && OK "NCCL" || WARN "NCCL not installed"
+fi
+if command -v nvidia-ctk >/dev/null; then
+	OK "NVIDIA Container Toolkit $(nvidia-ctk --version 2>/dev/null | sed -n 's/.*version \([0-9.]*\).*/\1/p' | head -1)"
+	check "CDI spec lists the GPU (/etc/cdi/nvidia.yaml)" 'nvidia-ctk cdi list 2>/dev/null | grep -q "nvidia.com/gpu=all"'
+fi
+if command -v docker >/dev/null; then
+	check "user in the docker group" 'id -nG | grep -qw docker' WARN
+	check "Docker running" 'systemctl is-active docker'
+	check "Docker has CDI enabled" 'docker info --format "{{.CDISpecDirs}}" 2>/dev/null | grep -q /etc/cdi' WARN
+	# runs only when the image is already present (no download from a health check)
+	docker image inspect ubuntu:26.04 >/dev/null 2>&1 &&
+		check "GPU inside a container (CDI)" 'docker run --rm --device nvidia.com/gpu=all ubuntu:26.04 nvidia-smi -L' WARN
+fi
+[ -f /etc/security/limits.d/90-proart-dgx.conf ] &&
+	check "memlock unlimited (DGX Spark limit; log in again)" '[ "$(ulimit -l)" = unlimited ]' WARN
+
 echo "== Power saving"
 # powersupersave (L1.2) made sleeps of more than a few minutes hang on resume
 check "PCIe ASPM policy not powersupersave (long sleeps would hang)" '! grep -q "\[powersupersave\]" /sys/module/pcie_aspm/parameters/policy'
