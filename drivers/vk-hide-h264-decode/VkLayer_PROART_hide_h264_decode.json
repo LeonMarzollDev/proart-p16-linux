@@ -1,0 +1,12 @@
+{
+    "file_format_version": "1.2.0",
+    "layer": {
+        "name": "VK_LAYER_PROART_hide_h264_decode",
+        "type": "GLOBAL",
+        "library_path": "/usr/lib/aarch64-linux-gnu/libVkLayer_PROART_hide_h264_decode.so",
+        "api_version": "1.4.0",
+        "implementation_version": "1",
+        "description": "Hides VK_KHR_video_decode_h264 from Firefox (the N1X driver decodes H.264 wrongly through Vulkan)",
+        "disable_environment": { "PROART_HIDE_H264_DECODE_DISABLE": "1" }
+    }
+}

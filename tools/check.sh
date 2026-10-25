@@ -102,6 +102,8 @@ check "NVIDIA driver ($(nvidia-smi --query-gpu=driver_version,pstate --format=cs
 check "GPU battery cap off (RMSkipACPIBattCap, install/02-nvidia.sh)" 'grep -q "RMSkipACPIBattCap=1" /proc/driver/nvidia/params'
 check "snap EGL shim" 'test -f /usr/share/glvnd/egl_vendor.d/09_nvidia_snap.json -a -f /usr/lib/aarch64-linux-gnu/libnvidia-snap-egl.so'
 check "VA-API environment" 'test -f ~/.config/environment.d/90-nvidia-vaapi.conf' WARN
+# the driver's Vulkan H.264 decoder returns blocky frames; Firefox must decode H.264 in software
+check "Firefox H.264 Vulkan layer (install/07-video-firefox.sh)" 'test -f /usr/share/vulkan/implicit_layer.d/VkLayer_PROART_hide_h264_decode.json -a -f /usr/lib/aarch64-linux-gnu/libVkLayer_PROART_hide_h264_decode.so' WARN
 
 echo "== Power saving"
 # powersupersave (L1.2) made sleeps of more than a few minutes hang on resume

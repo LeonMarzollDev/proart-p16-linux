@@ -226,6 +226,28 @@ output latency, which matters only for live music software.
   `media.hardware-video-decoding-vulkan.force-enabled` lifts that. Measured with 4K test clips:
   AV1 NVDEC 3-4 %, VP9 8-9 %, H.264 6 %, RDD process 0-10 % CPU, no software fallback.
   YouTube 2160p60 (VP9/AV1): NVDEC 11-19 %, RDD process 20-30 % CPU instead of 260-700 %.
+- **H.264 through Vulkan is broken in the 615.71.09 driver** (found 2026-10-25: VOE streams turned
+  blocky for a few seconds at a time, YouTube was fine). The driver returns wrong pictures for some
+  streams; the error spreads until the next keyframe.
+  - It depends on the encoder settings. Test clips, 1080p, 1.5 Mbit/s, compared frame by frame
+    against a software decode: x264 `-preset fast` gives 58 of 96 frames wrong (PSNR down to 20 dB),
+    `-preset medium` gives 0. `weightp=2` hides it, so it is not the weighted prediction alone.
+  - FFmpeg 8.0.1 (`-hwaccel vulkan`) and GStreamer (`vulkanh264dec`, PSNR ~22 dB even for the medium
+    clip) both show it. NVDEC through CUDA (`-hwaccel cuda`) is bit-exact, as are Vulkan AV1 and HEVC,
+    so the fault is in the driver's Vulkan H.264 path.
+  - Firefox decodes H.264 through the system FFmpeg (`libavcodec.so.62`) with Vulkan; VP9/AV1 go
+    through its bundled ffvpx, which has no H.264 decoder. There is no per-codec pref.
+  - Fix: `drivers/vk-hide-h264-decode`, an implicit Vulkan layer that hides `VK_KHR_video_decode_h264`
+    only in Firefox. Firefox then reports "Hw codec disabled by gfxVars for AV_CODEC_ID_H264" and decodes
+    H.264 with FFmpeg in software, about half a core for a 1080p stream; AV1/VP9/HEVC stay on NVDEC.
+    Remove it once a driver decodes H.264 correctly (check the `-preset fast` clip with
+    `-hwaccel vulkan` against a software framemd5).
+  - The layer recognises Firefox by its program name (`argv[0]`), not by `/proc/self/exe`, which the
+    sandboxed processes may not read. The names are `firefox`, `firefox-bin` and `gfxtest`: the per-codec
+    hardware/software decision comes from the `gfxtest` helper's probe, so hiding the extension only
+    in `firefox-bin` changed nothing.
+  - The first build kept a 260 KiB extension buffer on the stack and crashed Firefox's RDD process
+    (small thread stacks); the layer now uses the heap.
 - `install/07-video-firefox.sh` puts these prefs into `/usr/lib/firefox/defaults/pref/`, so
   they apply to every profile (`config/firefox/proart-nvidia.js`). The environment
   (`MOZ_DISABLE_RDD_SANDBOX=1` for `/dev/nvidia*`, `LIBVA_DRIVER_NAME`, `NVD_BACKEND`) comes from

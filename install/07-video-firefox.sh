@@ -9,21 +9,25 @@
 # The VA-API environment (LIBVA_DRIVER_NAME, NVD_BACKEND, MOZ_DISABLE_RDD_SANDBOX) is installed by
 # user/install-user.sh; the Firefox prefs for every profile by step 3 (config/firefox/proart-nvidia.js:
 # Vulkan video decoding; VA-API cannot export frames on the N1X). See docs/technical-notes.md.
+#  - A Vulkan layer that hides the driver's broken Vulkan H.264 decoder from Firefox (H.264 then decodes in
+#    software, AV1/VP9/HEVC stay on NVDEC): drivers/vk-hide-h264-decode.
 # Profiles: copy ~/snap/firefox/common/.mozilla/firefox to ~/.mozilla/ (with Firefox closed) and
 # select the profile in about:profiles. The snap stays installed as a fallback.
 # Remove: apt remove firefox nvidia-vaapi-driver; rm /etc/apt/sources.list.d/mozilla.list \
-#         /etc/apt/preferences.d/mozilla /etc/apt/keyrings/packages.mozilla.org.asc
+#         /etc/apt/preferences.d/mozilla /etc/apt/keyrings/packages.mozilla.org.asc \
+#         /usr/lib/aarch64-linux-gnu/libVkLayer_PROART_hide_h264_decode.so \
+#         /usr/share/vulkan/implicit_layer.d/VkLayer_PROART_hide_h264_decode.json
 # Run with: sudo bash install/07-video-firefox.sh
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 require_root
 MOZILLA_FPR=35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3
 
-echo "== 1/2 nvidia-vaapi-driver + vainfo"
+echo "== 1/4 nvidia-vaapi-driver + vainfo"
 apt_update
 apt-get install -y nvidia-vaapi-driver vainfo curl gpg
 
-echo "== 2/2 Firefox from Mozilla's APT repository"
+echo "== 2/4 Firefox from Mozilla's APT repository"
 install -d -m 0755 /etc/apt/keyrings
 curl -fsSL https://packages.mozilla.org/apt/repo-signing-key.gpg -o /etc/apt/keyrings/packages.mozilla.org.asc
 GNUPGTMP=$(mktemp -d)
@@ -47,10 +51,26 @@ apt_update
 apt-get install -y --allow-downgrades firefox
 dpkg -l firefox | tail -1
 
-echo "== 3/3 Hardware video decoding for every Firefox profile (default prefs)"
+echo "== 3/4 Hardware video decoding for every Firefox profile (default prefs)"
 # read before any profile, so they apply to new and existing ones; a profile can still change them.
 # Not an enterprise policy: Firefox reads gfx.blocklist.all before policies are applied.
 install -m 644 "$REPO/config/firefox/proart-nvidia.js" /usr/lib/firefox/defaults/pref/
+
+echo "== 4/4 Vulkan layer: Firefox decodes H.264 in software (the driver's Vulkan H.264 decoder is broken)"
+command -v gcc >/dev/null || apt-get install -y build-essential
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+LAYER=$REPO/drivers/vk-hide-h264-decode
+gcc -O2 -Wall -Wextra -shared -fPIC -fvisibility=hidden -o "$WORK/layer.so" "$LAYER/hide_h264_decode.c"
+install -m 644 "$WORK/layer.so" /usr/lib/aarch64-linux-gnu/libVkLayer_PROART_hide_h264_decode.so
+install -D -m 644 "$LAYER/VkLayer_PROART_hide_h264_decode.json" /usr/share/vulkan/implicit_layer.d/VkLayer_PROART_hide_h264_decode.json
+if ! command -v vulkaninfo >/dev/null; then
+	echo "Installed (vulkan-tools missing, not checked)"
+elif PROART_HIDE_H264_DECODE=1 vulkaninfo 2>/dev/null | grep -q 'VK_KHR_video_decode_h264 '; then
+	echo "WARNING: the layer did not hide VK_KHR_video_decode_h264"
+else
+	echo "Layer active (Firefox only)"
+fi
 
 echo
 echo "Done. Next (as your user): user/install-user.sh, log out and back in, and check that the dock"

@@ -8,6 +8,8 @@
 // Firefox's Vulkan video decoding works: NVDEC decodes AV1/VP9/H.264/HEVC, the decoder process
 // uses 0-10 % CPU instead of several cores. Release builds block it for every GPU
 // (FEATURE_VIDEO_DECODING_VULKAN_DISABLED); force-enabled ranks above the blocklist.
+// H.264 is the exception: the driver's Vulkan H.264 decoder returns blocky frames, so a Vulkan layer
+// (drivers/vk-hide-h264-decode) hides it from Firefox and H.264 decodes in software.
 pref("media.hardware-video-decoding-vulkan.enabled", true);
 pref("media.hardware-video-decoding-vulkan.force-enabled", true);
 // The generic hardware decoding feature is blocklisted for NVIDIA on Linux

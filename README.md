@@ -58,6 +58,7 @@ issue), so some fixes may help there too - reports welcome.
 | No battery charge limit ("preserve battery health") | same | [`drivers/proart-battery`](drivers/proart-battery) |
 | Temperatures of 1000-6000 C, fan at 164613644 rpm | power meters exposed as thermal zones, broken EC path | [`drivers/proart-battery`](drivers/proart-battery) |
 | 4K YouTube stutters, video decoded on the CPU | Firefox snap without NVIDIA; Firefox blocklists NVIDIA decoding; VA-API cannot export frames on the N1X | [`install/07-video-firefox.sh`](install/07-video-firefox.sh) (Vulkan video decoding) |
+| H.264 videos (e.g. VOE) turn blocky for a few seconds | NVIDIA's Vulkan H.264 decoder returns wrong frames for some streams | [`install/07-video-firefox.sh`](install/07-video-firefox.sh) (Vulkan layer: Firefox decodes H.264 in software) |
 | x86 Windows games / Star Citizen do not start (arm64), RSI Launcher reacts after a second | no x86 emulation; vsync presents stall, wineserver round trips, threads on efficiency cores | [`optional/gaming/`](optional/gaming), [docs/gaming.md](docs/gaming.md) |
 | GPU stuck at 20-30 W even on the charger (AI, games, rendering slow) | the firmware tells the NVIDIA driver "battery" all the time, so it applies its battery cap | [`install/02-nvidia.sh`](install/02-nvidia.sh) (`RMSkipACPIBattCap`); on battery a platform limit of ~20 W remains |
 | Snap apps (Snap Store, Chromium/Electron/Qt apps) slow, render with llvmpipe | snapd does not expose `libnvidia-rmapi-tegra` | [`install/09-snap-gpu.sh`](install/09-snap-gpu.sh) |
@@ -76,7 +77,7 @@ issue), so some fixes may help there too - reports welcome.
 | Keyboard backlight | blinks constantly (OOBE demo mode), no control | steady (OOBE off); F4 cycles off/1/2/3 with the GNOME level OSD; slider in the status menu (patched hid-asus, verified) |
 | Fn keys / Fn-lock | Fn-lock (Fn+Esc) does nothing | media keys first, Fn+Esc switches; state shown in the top bar and as a notification (`proart-fnlock`) |
 | Display (3840x2400 OLED) | framebuffer only, 60 Hz, no acceleration | NVIDIA 615, 120 Hz |
-| GPU video decoding | - | Firefox decodes AV1/VP9/H.264/HEVC on NVDEC through Vulkan video: YouTube 2160p60 with the decoder process at 20-30 % CPU instead of 260-700 %; VA-API decodes but cannot export frames |
+| GPU video decoding | - | Firefox decodes AV1/VP9/HEVC on NVDEC through Vulkan video: YouTube 2160p60 with the decoder process at 20-30 % CPU instead of 260-700 %; H.264 in software, because the driver's Vulkan H.264 decoder is broken; VA-API decodes but cannot export frames |
 | Speakers | no sound card | 2-way speakers: ASUS woofer tuning, tweeters enabled, time-aligned crossover, tone control |
 | Headphone jack, internal mic, headset mic | no sound card | works (NVIDIA UCM profile); tweeters mute when headphones are plugged in |
 | Battery / AC adapter | 0 % / not detected | works (`proart_battery`): level, charging/discharging, power draw and time remaining (verified) |
