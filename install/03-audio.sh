@@ -73,5 +73,22 @@ rm -f /etc/modules-load.d/proart-audio.conf
 echo "== 4/4 Update the initramfs"
 update-initramfs -u -k "$KREL"
 
+# Per-unit speaker calibration: cs35l56 reads it from the UEFI variable the Windows driver uses
+# (CirrusSmartAmpCalibrationData) and applies it once the tuning above is loaded. Report only.
+CAL=/sys/firmware/efi/efivars/CirrusSmartAmpCalibrationData-02f9af02-7734-4233-b43d-93fe5aa35db3
+if [ -e "$CAL" ]; then
+	echo "Speaker calibration: UEFI variable present ($(stat -c %s "$CAL") bytes), applied by cs35l56"
+else
+	echo "Speaker calibration: no CirrusSmartAmpCalibrationData UEFI variable - amps use the default"
+fi
+
+# Optional: the patched SoundWire manager for audio after long sleeps (research/audio-suspend.md)
+if [ "${PROART_SDW_DKMS:-0}" = 1 ]; then
+	bash "$REPO/patches/audio/install-sdw-dkms.sh"
+else
+	echo "Audio after long sleeps: sudo bash patches/audio/install-sdw-dkms.sh (patched soundwire-mtk)"
+	echo "                         and/or sudo bash optional/sleep-audio.sh (sleep hook fallback)"
+fi
+
 echo
 echo "Done. Reboot, then run (as your user):  user/install-user.sh"

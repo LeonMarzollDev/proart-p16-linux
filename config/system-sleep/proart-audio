@@ -1,36 +1,65 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
-# ASUS ProArt P16 H7607BA: keep the audio power domain powered during s2idle.
+# ASUS ProArt P16 H7607BA: internal audio across long s2idle sleeps.
 #
-# On system suspend mtk-soundwire drops its MTCMOS votes so the SoC can reach PPS7/PPS8. After a
-# few minutes in that state AUDIO_PD loses power, and state the firmware sets at boot is gone:
-# the cs42l43 (mic, jack, tweeters) stops producing data and the speakers crackle until a reboot.
-# Reloading the audio drivers does not bring it back. So before sleeping this asks the SSPM
-# firmware (through power_wrap's request node, the same path the AFE driver uses) for its
-# always-on audio power scene and an extra AUDIO_PD vote, and releases both after waking.
-# Installed to /usr/lib/systemd/system-sleep/ by optional/sleep-audio.sh.
+# After a few minutes of s2idle the cs42l43 (mic, jack, tweeters) delivered no data and the
+# speakers crackled until a reboot (research/audio-suspend.md). Most likely cause: the SoundWire
+# bus/PHY clock muxes are left on their low-power parent (osc_d20) by the SoC's deep idle, and the
+# Linux driver never selects the APLL2 parent again (the Windows driver does on every power-up).
+# The proper fix is the patched soundwire-mtk module (patches/audio/install-sdw-dkms.sh). This hook
+# is the fallback, with two independent measures (settings in /etc/default/proart-audio):
+#
+#  PROART_AUDIO_KEEP_ON=1      before sleeping, ask the SSPM for its always-on audio power scene and
+#                              an extra AUDIO_PD vote (slightly higher sleep power); released on wake.
+#  PROART_AUDIO_RESUME_CLK=1   after waking, if the running soundwire-mtk is not the patched one:
+#                              select the APLL2 parents of the SoundWire clocks again and restart
+#                              link 1 (deep reset = clock cycle + re-enumeration).
+#
+# Installed to /usr/lib/systemd/system-sleep/ by optional/sleep-audio.sh. Log: journalctl -t proart-audio
 REQ=/sys/bus/platform/devices/NVDA6210:00/pwrap_power_ctrl_req
+SDW_RESET=/sys/kernel/debug/NVDA9100:00/bus_reset
+PROART_AUDIO_KEEP_ON=1
+PROART_AUDIO_RESUME_CLK=1
+[ -r /etc/default/proart-audio ] && . /etc/default/proart-audio
 LOG="logger -t proart-audio"
 
-# \_SB.ASD0 = MT8901 AFE; commands from mt8901-afe-clk.h: 0 = MTCMOS (domain 2 = AUDIO_PD),
-# 6 = PWR_CTRL_SCENE (0 = normal, 2 = always on)
+# Commands from mt8901-afe-clk.h: 0 = MTCMOS (domain 2 = AUDIO_PD), 4 = VLP_SYS_CLK_SET_PARENT,
+# 6 = PWR_CTRL_SCENE (0 = normal, 2 = always on). \_SB.ASD0 = AFE, \_SB.CNT0 = SoundWire manager.
 sspm() {
-	if echo "\\_SB.ASD0 $*" > "$REQ" 2>/dev/null; then
-		$LOG "SSPM audio request $*"
+	local dev=$1; shift
+	if echo "$dev $*" > "$REQ" 2>/dev/null; then
+		$LOG "SSPM request $dev $*"
 	else
-		$LOG "SSPM audio request $* failed"
+		$LOG "SSPM request $dev $* failed"
+		return 1
 	fi
 }
 
-[ -w "$REQ" ] || { $LOG "power_wrap request node missing, audio not kept on"; exit 0; }
+patched_sdw() { [ -e /sys/module/soundwire_mtk/parameters/sdw_set_clk_parents ]; }
+
+[ -w "$REQ" ] || { $LOG "power_wrap request node missing, nothing done"; exit 0; }
 case "$1" in
 pre)
-	sspm 6 2 0 0
-	sspm 0 2 1 0
+	if [ "$PROART_AUDIO_KEEP_ON" = 1 ]; then
+		sspm '\_SB.ASD0' 6 2 0 0
+		sspm '\_SB.ASD0' 0 2 1 0
+	fi
 	;;
 post)
-	sspm 0 2 0 0
-	sspm 6 0 0 0
+	if [ "$PROART_AUDIO_KEEP_ON" = 1 ]; then
+		sspm '\_SB.ASD0' 0 2 0 0
+		sspm '\_SB.ASD0' 6 0 0 0
+	fi
+	if [ "$PROART_AUDIO_RESUME_CLK" = 1 ] && ! patched_sdw; then
+		# mux ids: 3/4 = AUD_SOUNDWIRE0/1_SEL, 5/6 = AUD_SOUNDWIRE0/1_PHY_SEL; level 3 = apll2_d8
+		# (bus) / apll2 (PHY), from the Windows driver's parent table.
+		ok=1
+		for mux in 3 4 5 6; do sspm '\_SB.CNT0' 4 $mux 3 0 || ok=0; done
+		mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug 2>/dev/null
+		if [ $ok = 1 ] && [ -w "$SDW_RESET" ]; then
+			echo 11 > "$SDW_RESET" && $LOG "SoundWire link 1 deep reset" || $LOG "SoundWire link 1 deep reset failed"
+		fi
+	fi
 	;;
 esac
 exit 0

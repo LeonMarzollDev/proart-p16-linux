@@ -1,0 +1,89 @@
+From 56f71f577da7d01cb6ec9d88327ed4174f0bcffe Mon Sep 17 00:00:00 2001
+From: ProArt P16 Linux <proart-p16-linux@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 02:51:13 +0200
+Subject: [PATCH 3/4] soundwire: mediatek: restart the links on system resume
+ as at probe
+
+Probe brings every link up with mtk_sdw_core_bus_reset() - soft reset,
+quiesce with the bus keepers on, a dwell, then the full controller
+re-init - because that is the one enumeration sequence known to work
+reliably with these peripherals ("Re-initializing while the bus keeps
+running in normal mode ... leaves peripherals unable to regain frame
+sync"). System resume only runs mtk_sdw_reinit_master(), and it does
+not arm the attach check that probe arms, so a link whose peripherals
+do not come back stays silent until the next boot.
+
+The CS35L56/CS42L43 peripherals on this platform keep their rail and
+their state while the manager is off, for however long the system
+sleeps. Restart them on resume through the probe sequence (module
+parameter restart_on_resume, default on, to fall back to the plain
+re-init) and arm the attach check afterwards as a backstop.
+---
+ drivers/soundwire/mediatek/mtk-sdw.c | 38 +++++++++++++++++++++++++++-
+ 1 file changed, 37 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/soundwire/mediatek/mtk-sdw.c b/drivers/soundwire/mediatek/mtk-sdw.c
+index 788258e..467355f 100644
+--- a/drivers/soundwire/mediatek/mtk-sdw.c
++++ b/drivers/soundwire/mediatek/mtk-sdw.c
+@@ -37,6 +37,15 @@ static bool restart_on_probe = true;
+ module_param(restart_on_probe, bool, 0444);
+ MODULE_PARM_DESC(restart_on_probe, "Restart each SoundWire link at probe instead of adopting the POST-enumerated bus (default: on)");
+ 
++/*
++ * Run the same restart on system resume: the peripherals keep their rail
++ * and state while the manager is off, so bring them back through the one
++ * enumeration sequence known to work reliably instead of a plain re-init.
++ */
++static bool restart_on_resume = true;
++module_param(restart_on_resume, bool, 0644);
++MODULE_PARM_DESC(restart_on_resume, "Restart each SoundWire link (soft reset + quiesce) on system resume (default: on)");
++
+ static acpi_status mtk_sdw_apply_pin_bias_cb(struct acpi_resource *res,
+ 					     void *context)
+ {
+@@ -1526,13 +1535,40 @@ static int mtk_sdw_exit_low_power_mode(struct mtk_sdw *mst, int idx)
+ 
+ 	sdw_clear_slave_status(&core->bus, SDW_UNATTACH_REQUEST_MASTER_RESET);
+ 
+-	ret = mtk_sdw_reinit_master(core);
++	if (restart_on_resume) {
++		/*
++		 * Same sequence as probe (mtk_sdw_link_init()): program the
++		 * controller, then soft reset + quiesce + dwell + re-init so the
++		 * peripherals, which kept their rail and state through the
++		 * sleep, see a defined quiet bus before the clock restarts, and
++		 * only then arm the interrupts (the restart clears the slave
++		 * interrupt masks, enable_irq() sets them again).
++		 */
++		ret = mtk_sdw_core_hw_init(core);
++		if (!ret)
++			ret = mtk_sdw_core_bus_reset(core);
++		if (!ret) {
++			mtk_sdw_enable_irq(core, true);
++			schedule_delayed_work(&core->status_work,
++					      msecs_to_jiffies(100));
++		}
++	} else {
++		ret = mtk_sdw_reinit_master(core);
++	}
+ 	if (ret) {
+ 		dev_err(mst->dev, "mtk_sdw_reinit_master failed: %d\n", ret);
+ 		mtk_sdw_disable_spm_request(mst, idx);
+ 		mtk_sdw_disable_top_clock(mst, idx);
++		goto out;
+ 	}
+ 
++	/*
++	 * Backstop, as after probe: if no declared peripheral has attached
++	 * when the check runs, restart the bus once more.
++	 */
++	schedule_delayed_work(&core->attach_check_work,
++			      msecs_to_jiffies(MTK_SDW_ATTACH_CHECK_DELAY_MS));
++
+ out:
+ 	mutex_unlock(&core->reset_lock);
+ 	return ret;
+-- 
+2.53.0
+
