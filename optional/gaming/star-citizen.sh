@@ -76,7 +76,6 @@ cat > "$INSTALL/start-sc.sh" <<'EOF'
 DIR=$(dirname "$(readlink -f "$0")")
 export XMODIFIERS=@im=none
 export DXVK_CONFIG_FILE="$DIR/dxvk.conf"
-"$DIR/sc-window-fix.sh" &   # launcher window off-screen after a monitor change -> back onto a screen
 exec uclampset -m 768 FEXBash "$DIR/sc-launch.sh" "$@"
 EOF
 cat > "$INSTALL/dxvk.conf" <<'EOF'
@@ -84,7 +83,6 @@ cat > "$INSTALL/dxvk.conf" <<'EOF'
 # with an idle GPU); without the wait 60 frames/s. Limit the game's frame rate in the game instead.
 dxgi.syncInterval = 0
 EOF
-install -m 755 "$(dirname "$0")/sc-window-fix.sh" "$INSTALL/sc-window-fix.sh"
 chmod 755 "$INSTALL/sc-launch.sh" "$INSTALL/start-sc.sh"
 mkdir -p "$HOME/.local/share/applications"
 for entry in "star-citizen:Star Citizen" "rsi-launcher:RSI Launcher"; do
