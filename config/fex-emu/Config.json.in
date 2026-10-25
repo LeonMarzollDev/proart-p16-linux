@@ -1,0 +1,16 @@
+{
+  "Config": {
+    "RootFS": "Ubuntu_24_04",
+    "ThunkConfig": "@CONFIG@/thunks.json",
+    "ThunkHostLibs": "/usr/lib/aarch64-linux-gnu/fex-emu/HostThunks",
+    "ThunkGuestLibs": "/usr/share/fex-emu/GuestThunks",
+    "TSOEnabled": "1",
+    "HalfBarrierTSOEnabled": "1",
+    "VectorTSOEnabled": "0",
+    "MemcpySetTSOEnabled": "0",
+    "Multiblock": "1",
+    "SMCChecks": "1",
+    "MonoHacks": "1",
+    "DiskCache": "1"
+  }
+}

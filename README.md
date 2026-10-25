@@ -58,6 +58,7 @@ issue), so some fixes may help there too - reports welcome.
 | No battery charge limit ("preserve battery health") | same | [`drivers/proart-battery`](drivers/proart-battery) |
 | Temperatures of 1000-6000 C, fan at 164613644 rpm | power meters exposed as thermal zones, broken EC path | [`drivers/proart-battery`](drivers/proart-battery) |
 | 4K YouTube stutters, video decoded on the CPU | Firefox snap without NVIDIA; Firefox blocklists NVIDIA decoding; VA-API cannot export frames on the N1X | [`install/07-video-firefox.sh`](install/07-video-firefox.sh) (Vulkan video decoding) |
+| x86 Windows games / Star Citizen do not start (arm64), RSI Launcher reacts after a second | no x86 emulation; vsync presents stall, wineserver round trips, threads on efficiency cores | [`optional/gaming/`](optional/gaming), [docs/gaming.md](docs/gaming.md) |
 | GPU stuck at 20-30 W even on the charger (AI, games, rendering slow) | the firmware tells the NVIDIA driver "battery" all the time, so it applies its battery cap | [`install/02-nvidia.sh`](install/02-nvidia.sh) (`RMSkipACPIBattCap`); on battery a platform limit of ~20 W remains |
 | Snap apps (Snap Store, Chromium/Electron/Qt apps) slow, render with llvmpipe | snapd does not expose `libnvidia-rmapi-tegra` | [`install/09-snap-gpu.sh`](install/09-snap-gpu.sh) |
 | Dragging windows/files stutters at 120-180 Hz or with several monitors, GPU idle | GNOME Shell runs on the efficiency cores at ~340 MHz (energy-aware scheduling) | [`user/install-user.sh`](user/install-user.sh) (uclamp drop-in) |
@@ -147,6 +148,9 @@ sudo bash optional/easyeffects.sh          # EasyEffects + presets (not needed w
 sudo bash optional/nvbroadcast.sh          # NV Broadcast (community app, CPU modes on arm64) + v4l2loopback
 sudo bash optional/ui-control.sh           # ydotool for scripted desktop control
 sudo bash optional/phone-handsfree.sh      # phone calls through a paired phone in GNOME Calls (Bluetooth)
+sudo bash optional/gaming/emulators.sh     # FEX-Emu (x86 + AVX), RootFS, GPU thunks, ntsync [--hangover]
+bash optional/gaming/star-citizen.sh [dir] # Star Citizen / RSI Launcher via Wine under FEX (app menu, Lutris)
+bash optional/gaming/steam-library.sh DIR  # Steam (snap) installs games on another drive
 ```
 
 ### Diagnostics (`tools/`)
@@ -177,12 +181,12 @@ linux-nvidia packages and the `acpi_osi` parameter from `/etc/default/grub` (`up
 
 ```
 install/    numbered root steps (lib.sh: shared helpers)
-optional/   face login, EasyEffects, NV Broadcast, desktop automation, CPU modes
+optional/   face login, EasyEffects, NV Broadcast, desktop automation, CPU modes, gaming (FEX, Star Citizen, Steam)
 drivers/    proart-battery, proart-audio, hid-asus-proart (DKMS), proart-ffa-probe (diagnostic)
 config/     pipewire (2-way crossover), wireplumber (device names), ucm2, libinput, udev, environment.d
 user/       user tools (proart-eq, proart-tweeter, ...), systemd user unit, install-user.sh
 tools/      diagnostics and measurements
-docs/       hardware map and technical notes
+docs/       hardware map, technical notes, gaming
 ```
 
 ## Proprietary files
