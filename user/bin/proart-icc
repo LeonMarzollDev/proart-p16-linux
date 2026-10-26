@@ -1,0 +1,42 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Assign one of ASUS' factory colour profiles (installed by install/12-display.sh) to the internal
+# OLED panel of the ProArt P16 for the current user, through colord (GNOME Settings > Color uses
+# the same data). Run as your user inside the desktop session.
+#   proart-icc              list the profiles, assign the native-gamut one (H7607BA_10DE_<panel>.icm)
+#   proart-icc <name>       assign the profile whose file name contains <name> (e.g. ASUS_sRGB, CMDEF)
+#   proart-icc --off        remove the ASUS profiles from the panel again
+set -euo pipefail
+DIR=/usr/share/color/icc/asus-proart-p16
+command -v colormgr >/dev/null || { echo "colormgr missing (sudo apt install colord)"; exit 1; }
+ls "$DIR"/*.icm >/dev/null 2>&1 || { echo "no profiles in $DIR - run sudo bash install/12-display.sh first"; exit 1; }
+
+# the internal panel: colord display device whose model is the Samsung ATNA60HC05 (or embedded)
+# colormgr prints one block per device, starting with "Object Path:"; pick the block that names
+# the panel model or says the display is embedded (the laptop panel)
+dev=$(colormgr get-devices-by-kind display 2>/dev/null | awk '
+	/^Object Path:/ { if (hit && !done) { print path; done = 1 } path = $NF; hit = 0 }
+	/ATNA60|[Ee]mbedded.*([Yy]es|true|1)|eDP/ { hit = 1 }
+	END { if (hit && !done) print path }')
+[ -n "$dev" ] || { echo "internal panel not found in colord (colormgr get-devices-by-kind display)"; exit 1; }
+echo "panel: $dev"
+
+import() { colormgr import-profile "$1" >/dev/null 2>&1 || true
+	colormgr find-profile-by-filename "$(basename "$1")" 2>/dev/null | sed -n 's/^Object Path:[[:space:]]*//p' | head -1; }
+
+if [ "${1:-}" = --off ]; then
+	for f in "$DIR"/*.icm; do p=$(import "$f"); [ -n "$p" ] && colormgr device-remove-profile "$dev" "$p" 2>/dev/null || true; done
+	echo "ASUS profiles removed from the panel"; exit 0
+fi
+want=${1:-}
+if [ -z "$want" ]; then
+	ls "$DIR"
+	f=$(ls "$DIR"/H7607BA_10DE_*.icm | grep -vE '_(CMDEF|HDR)\.icm$' | head -1)
+else
+	f=$(ls "$DIR"/*.icm | grep -i -- "$want" | head -1)
+fi
+[ -n "$f" ] || { echo "no profile matching '$want'"; exit 1; }
+p=$(import "$f")
+colormgr device-add-profile "$dev" "$p" 2>/dev/null || true
+colormgr device-make-profile-default "$dev" "$p"
+echo "default profile for the panel: $(basename "$f")"

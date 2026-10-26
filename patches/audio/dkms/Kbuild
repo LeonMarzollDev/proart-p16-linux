@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Out-of-tree build of drivers/soundwire/mediatek (copied to that path in the DKMS tree).
+# bus.h (sdw_clear_slave_status) is installed one level up, as in the kernel tree.
+ccflags-y := -I$(src)/..
+soundwire-mtk-y := mtk-sdw.o mtk-sdw-top.o mtk-sdw-core.o mtk-sdw-mach.o mtk-sdw-chipglue.o mt8901-afe-clk.o
+obj-m += soundwire-mtk.o

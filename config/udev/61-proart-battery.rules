@@ -2,8 +2,9 @@
 # ASUS ProArt P16 H7607BA: let UPower (and GNOME's "preserve battery health" switch) use the
 # charge limit of proart_battery. UPower's own rule (60-upower-battery.rules) only imports the
 # CHARGE_LIMIT from its hwdb for batteries that also have a start threshold; the ASUS EC only
-# has an end threshold.
+# has an end threshold. proart_battery puts it on BAT1 (its own battery, BIOS .300 / "ec" mode)
+# or on the ACPI battery BAT0 (BIOS with a working EC path / "acpi" mode).
 ACTION=="remove", GOTO="proart_battery_end"
-SUBSYSTEM=="power_supply", KERNEL=="BAT1", ATTR{charge_control_end_threshold}!="", \
+SUBSYSTEM=="power_supply", KERNEL=="BAT[01]", ATTR{charge_control_end_threshold}!="", \
   IMPORT{builtin}="hwdb 'battery:$kernel:$attr{model_name}:$attr{[dmi/id]modalias}'"
 LABEL="proart_battery_end"

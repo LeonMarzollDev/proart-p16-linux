@@ -48,8 +48,26 @@ FF-A path returns success but the response never replaces the request in the AML
 | ODP battery `0x1`/`0x2`/`0x3` | `2`/`0`/`2` | not implemented by ASUS |
 
 The EC answers direct requests correctly, so `drivers/proart-battery` polls it and registers
-`BAT1`/`ADP1`, unbinding the broken ACPI `BAT0`/`AC0`. The ACPI path (FFH handler / AML buffer
-round trip) should be fixed in the kernel eventually; until then this driver is the workaround.
+`BAT1`/`ADP1`, unbinding the broken ACPI `BAT0`/`AC0`.
+
+### Root cause: a buffer-lifetime bug in the BIOS .300 AML (fixed in .303)
+
+The kernel side is fine: linux-nvidia's `nvidia-ffa-ec` implements the FFH operation region with
+Offset 2 (Arm DEN0048D: X0 status, X1 receiver, X2-X3 UUID, X4-X17 payload), sends
+`FFA_MSG_SEND_DIRECT_REQ2` and copies the answer back; ACPICA's `acpi_ex_write_serial_bus()`
+returns it in a new 256-byte buffer object. In BIOS .300 the ASUS accessors (`\_SB.EC0.RRA9`,
+`RRA8`, `WRA9`, `WRA8`, `RWEC`, `\_SB.BAT0.GBST`) keep the packet in a **Local**
+(`Local0 = Buffer (0x29) {}`, `CreateQWordField (Local0, ...)`) and do `Local0 = FFAC = Local0`.
+Storing to a Local rebinds it to the new object; the buffer fields keep pointing at the old one,
+which still holds the request. Hence the echo. BIOS **.303** declares the packet as
+`Name (RBUF, Buffer (0x29) {})` in all of these methods (checked in the .303 SSDT bytes:
+`08 52 42 55 46 11 03 0a 29`); a Store to a named buffer copies into the existing object, so the
+stock ACPI battery/AC/fan/thermal drivers should work there. proart_battery 2.0 detects this at
+load (`mode=auto`: compares `\_SB.EC0.RRA9(0x90, 1)` with a direct read) and then only adds the
+charge limit to `BAT0` instead of replacing it. Details and test procedure:
+`research/battery-ec-fans.md` (outside the repository) and `drivers/proart-battery/README.md`.
+On .303 `\_SB.AC0._PSR` should also be right, which may make `RMSkipACPIBattCap` (section 5,
+"GPU power") unnecessary on AC - to be re-measured.
 
 ### Fan modes, charge limit, fan speed (proart_battery 1.2)
 
@@ -197,6 +215,27 @@ apps get 1024 samples instead. With the same OpenCode stream open the graph stay
 stay RUNNING and the error counters stay flat. To apply it without a restart:
 `pw-metadata -n settings 0 clock.min-quantum 1024`. The cost is that no app gets less than 21 ms of
 output latency, which matters only for live music software.
+
+The limit hides a driver weakness rather than a pure PipeWire problem: every XRUN recovery of a
+SoundWire PCM is a stop/prepare/start cycle with two bank switches on the shared link 1, a fixed
+1 ms sleep in the MT8901 PDI enable (`mtk_sdw_top_enable_stream()`) and a PDI FIFO reset - longer
+than a 5.3 ms quantum - and the restart of one PCM disturbs the other PCM on the same link, so one
+XRUN keeps the pair cycling. What causes the first XRUN at 256 is not known yet; to check without
+PipeWire, see "Quantum" in `research/audio-suspend.md`.
+
+### 4.9 Audio after long sleeps (s2idle)
+
+After more than a few minutes of s2idle the cs42l43 delivered no data and the speakers crackled
+until a reboot; short sleeps were fine and reloading drivers did not help. Most likely cause: the
+SoundWire bus clock (`AUD_SOUNDWIRE1_SEL`, APLL2/8 = 24.576 MHz) and PHY clock muxes are never
+given a parent by Linux - `mt8901_afe_set_clock_parent()` in the SoundWire driver is dead code, the
+parent tables have no entries for these muxes - so the bus runs on whatever the boot firmware chose.
+The Windows controller driver re-selects them on every power-up (apll2_d8 / apll2, level 3) and
+parks them on osc_d20 for low power; after a deep idle the SoC can leave them on osc_d20, and both
+codecs lock their PLLs to the bus clock. Fixes in `patches/audio/` (patched `soundwire-mtk` as
+DKMS, plus re-applied pin bias and a probe-style link restart on resume) and the fallback sleep
+hook `optional/sleep-audio.sh`. Diagnosis: `patches/audio/proart-audio-diag.sh`. Full write-up:
+`research/audio-suspend.md` in the parent folder.
 
 ### 4.8 Measurement pitfalls
 
@@ -414,15 +453,20 @@ The IR camera works (alternating lit/dark frames from the strobing emitter, henc
 
 ## 9. Not solved
 
-- Battery through ACPI (kernel FFH/AML response path) - worked around by `proart_battery`.
+- Battery through ACPI: broken by the BIOS .300 AML (section 3), fixed in BIOS .303 according to
+  its tables; not yet confirmed on hardware. `proart_battery` 2.0 picks ACPI or its own BAT1.
+- Fans running in s2idle (~11 W asleep): arm64 Linux never evaluates the Modern Standby `_DSM`
+  of `\_SB.PEPD` (PNP0D80), so the EC is never told about sleep; `drivers/proart-s2idle`
+  (`install/15-s2idle.sh`, experimental) calls it. Whether the SoC reaches DRIPS in s2idle is a
+  second, kernel-side factor. Both untested on hardware.
 - Dolby Atmos (Windows-only); EasyEffects presets are an approximation.
 - Ambient light sensor: behind the HID-over-SPI sensor hub `SENH` (`MSFW1111`, SPI3). Linux 7.0
   has no generic HID-over-SPI driver (the spi-hid series is still under review), so no automatic
   brightness. The webcam's presence sensor (iio `prox`) works.
 - ASUS fan/performance profiles: solved in `proart_battery` 1.2 (see section 3).
 - Audio after s2idle sleeps of more than a few minutes: the cs42l43 (mic, jack, tweeters) stops
-  delivering data until a reboot. Reloading the audio drivers does not help; keeping the audio
-  power domain on during sleep is being tested.
+  delivering data until a reboot. Probable cause and fix (not yet confirmed on the laptop): section
+  4.9.
 - The internal mic as PipeWire graph driver derails after minutes (section 4.6).
 - GPU on battery: 20 W at ~1.0 GHz (clocks event reason "Reliability") even with the ACPI battery cap
   turned off (section 5, "GPU power"); on AC 42-66 W. The limit comes from the platform's DC policy.

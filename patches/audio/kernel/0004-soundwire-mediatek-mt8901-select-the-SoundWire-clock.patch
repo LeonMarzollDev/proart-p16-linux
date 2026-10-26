@@ -1,0 +1,164 @@
+From 531c3e5f185da05ab92024d44101007e58c1e362 Mon Sep 17 00:00:00 2001
+From: ProArt P16 Linux <proart-p16-linux@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 02:54:34 +0200
+Subject: [PATCH 4/4] soundwire: mediatek: mt8901: select the SoundWire clock
+ parents
+
+The SoundWire bus clock (AUD_SOUNDWIRE<n>_SEL) and PHY clock
+(AUD_SOUNDWIRE<n>_PHY_SEL) muxes have parent tables
+(sdw<n>_clk_parent_info: apll2_d8 / apll2 when active, osc_d20 for low
+power), but nothing ever calls mt8901_afe_set_clock_parent() - the
+compiler warns that it is unused - and the parent map has no entries for
+these muxes. The bus therefore runs on whatever parent the boot firmware
+selected. The reference (Windows) controller driver re-selects these
+parents itself: it switches both muxes of a link to osc_d20 for low power
+and back to apll2_d8 / apll2 when it powers up. Its parent table gives
+the levels: tcx_26m 0, osc_d20 1, apll1_d8 2, apll2_d8 3 for the bus
+clocks and tcx_26m 0, osc_d20 1, apll1 2, apll2 3 for the PHY clocks.
+
+If the SoC leaves the muxes on the low-power parent after a deep s2idle,
+the bus no longer runs from APLL2: the peripherals' PLLs (CS42L43 and
+CS35L56 lock to the bus clock) lose lock or drift against the AFE, the
+CS42L43 delivers no capture data and playback crackles, and no driver
+reload fixes it because no driver selects the parent.
+
+Add the levels to the parent map and select the APLL parents every time a
+link clock is enabled (probe, system resume, deep reset), before the muxes
+are ungated. sdw_set_clk_parents=0 restores the old behaviour;
+sdw_lp_clk_parents=1 additionally moves the muxes to osc_d20 when a link
+clock is released, as the reference driver does (off by default).
+---
+ drivers/soundwire/mediatek/mt8901-afe-clk.c | 94 +++++++++++++++++++++
+ 1 file changed, 94 insertions(+)
+
+diff --git a/drivers/soundwire/mediatek/mt8901-afe-clk.c b/drivers/soundwire/mediatek/mt8901-afe-clk.c
+index 08ff8c2..4a67a0a 100644
+--- a/drivers/soundwire/mediatek/mt8901-afe-clk.c
++++ b/drivers/soundwire/mediatek/mt8901-afe-clk.c
+@@ -94,8 +94,62 @@ static const struct {
+ 	  CLK_PARENT_TCX_26M_MX9_CK_NAME, 0 },
+ 	{ AFE_CLK_VLP_CKSYS_TOP_AUD_2_SEL,
+ 	  CLK_PARENT_APLL2_NAME, 1 },
++
++	/*
++	 * SoundWire bus and PHY clocks, same levels as the reference
++	 * (Windows) controller driver's parent table for hf_faud_soundwire*_ck
++	 * and hf_faud_soundwire_phy*_ck.
++	 */
++	{ AFE_CLK_VLP_CKSYS_TOP_AUD_SOUNDWIRE0_SEL,
++	  CLK_PARENT_TCX_26M_MX9_CK_NAME, 0 },
++	{ AFE_CLK_VLP_CKSYS_TOP_AUD_SOUNDWIRE0_SEL,
++	  CLK_PARENT_OSC_D20_NAME, 1 },
++	{ AFE_CLK_VLP_CKSYS_TOP_AUD_SOUNDWIRE0_SEL,
++	  CLK_PARENT_APLL1_D8_NAME, 2 },
++	{ AFE_CLK_VLP_CKSYS_TOP_AUD_SOUNDWIRE0_SEL,
++	  CLK_PARENT_APLL2_D8_NAME, 3 },
++
++	{ AFE_CLK_VLP_CKSYS_TOP_AUD_SOUNDWIRE1_SEL,
++	  CLK_PARENT_TCX_26M_MX9_CK_NAME, 0 },
++	{ AFE_CLK_VLP_CKSYS_TOP_AUD_SOUNDWIRE1_SEL,
++	  CLK_PARENT_OSC_D20_NAME, 1 },
++	{ AFE_CLK_VLP_CKSYS_TOP_AUD_SOUNDWIRE1_SEL,
++	  CLK_PARENT_APLL1_D8_NAME, 2 },
++	{ AFE_CLK_VLP_CKSYS_TOP_AUD_SOUNDWIRE1_SEL,
++	  CLK_PARENT_APLL2_D8_NAME, 3 },
++
++	{ AFE_CLK_VLP_CKSYS_TOP_AUD_SOUNDWIRE0_PHY_SEL,
++	  CLK_PARENT_TCX_26M_MX9_CK_NAME, 0 },
++	{ AFE_CLK_VLP_CKSYS_TOP_AUD_SOUNDWIRE0_PHY_SEL,
++	  CLK_PARENT_OSC_D20_NAME, 1 },
++	{ AFE_CLK_VLP_CKSYS_TOP_AUD_SOUNDWIRE0_PHY_SEL,
++	  CLK_PARENT_APLL1_NAME, 2 },
++	{ AFE_CLK_VLP_CKSYS_TOP_AUD_SOUNDWIRE0_PHY_SEL,
++	  CLK_PARENT_APLL2_NAME, 3 },
++
++	{ AFE_CLK_VLP_CKSYS_TOP_AUD_SOUNDWIRE1_PHY_SEL,
++	  CLK_PARENT_TCX_26M_MX9_CK_NAME, 0 },
++	{ AFE_CLK_VLP_CKSYS_TOP_AUD_SOUNDWIRE1_PHY_SEL,
++	  CLK_PARENT_OSC_D20_NAME, 1 },
++	{ AFE_CLK_VLP_CKSYS_TOP_AUD_SOUNDWIRE1_PHY_SEL,
++	  CLK_PARENT_APLL1_NAME, 2 },
++	{ AFE_CLK_VLP_CKSYS_TOP_AUD_SOUNDWIRE1_PHY_SEL,
++	  CLK_PARENT_APLL2_NAME, 3 },
+ };
+ 
++/*
++ * The bus clock parents are the boot firmware's choice unless something sets
++ * them; the reference driver re-selects them (APLL2 when active, osc_d20 for
++ * low power) and the SoC's deep idle can leave them on the low-power parent.
++ */
++static bool sdw_set_clk_parents = true;
++module_param(sdw_set_clk_parents, bool, 0644);
++MODULE_PARM_DESC(sdw_set_clk_parents, "Select the APLL2 parents of the SoundWire bus/PHY clocks whenever a link clock is enabled (default: on)");
++
++static bool sdw_lp_clk_parents;
++module_param(sdw_lp_clk_parents, bool, 0644);
++MODULE_PARM_DESC(sdw_lp_clk_parents, "Move the SoundWire bus/PHY clocks to osc_d20 when a link clock is released, as the reference driver does in low power (default: off)");
++
+ static const struct {
+ 	unsigned int mux;
+ 	const char *idle_parent_name;
+@@ -667,6 +721,34 @@ static int mt8901_afe_set_clock_parent(struct mtk_sdw *mst, unsigned int mux,
+ 	return ret;
+ }
+ 
++/* Select the APLL (active) or osc_d20 (low-power) parents of one link's clocks. */
++static int mt8901_sdw_select_clk_parents(struct mtk_sdw *mst, int link,
++					 bool low_power)
++{
++	const struct sdw_clk_parent_info *info;
++	int i, ret;
++
++	if (link == MTK_SDW_CONTROLLER_0)
++		info = sdw0_clk_parent_info;
++	else if (link == MTK_SDW_CONTROLLER_1)
++		info = sdw1_clk_parent_info;
++	else
++		return -EINVAL;
++
++	for (i = 0; i < ARRAY_SIZE(sdw0_clk_parent_info); i++) {
++		ret = mt8901_afe_set_clock_parent(mst, info[i].mux,
++						  low_power ? info[i].lp_parent_name :
++							      info[i].apll_parent_name);
++		if (ret) {
++			dev_warn(mst->dev, "[%d] set clock parent of mux %u failed: %d\n",
++				 link, info[i].mux, ret);
++			return ret;
++		}
++	}
++
++	return 0;
++}
++
+ static int mt8901_afe_enable_sdw_top_clock(struct mtk_sdw *mst, int link)
+ {
+ 	struct device *dev = mst->dev;
+@@ -833,6 +915,15 @@ static int mt8901_sdw_enable_link_clock(struct mtk_sdw *mst, int link)
+ 	struct mtk_sdw_link *sdw_link = &mst->links[link];
+ 	int ret;
+ 
++	/*
++	 * Re-select the bus/PHY clock parents before the muxes are enabled
++	 * (glitch free while gated). Probe, system resume and the deep reset
++	 * all come through here. Not fatal: the boot firmware's selection may
++	 * still be in place.
++	 */
++	if (sdw_set_clk_parents)
++		mt8901_sdw_select_clk_parents(mst, link, false);
++
+ 	ret = mt8901_afe_enable_sdw_top_clock(mst, link);
+ 	if (ret) {
+ 		dev_err(mst->dev, "failed to enable sdw_top clock, ret %d\n",
+@@ -965,6 +1056,9 @@ static int mt8901_sdw_disable_link_clock(struct mtk_sdw *mst, int link)
+ 		goto err_active;
+ 	}
+ 
++	if (sdw_lp_clk_parents)
++		mt8901_sdw_select_clk_parents(mst, link, true);
++
+ 	return 0;
+ 
+ err_active:
+-- 
+2.53.0
+

@@ -3,12 +3,17 @@
 # ASUS ProArt P16 H7607BA - step 4: battery, AC adapter, fan, performance modes, charge limit
 # (proart_battery, DKMS)
 #
-# The BIOS talks to the ASUS EC service over FF-A, but on Linux the responses never reach the AML:
-# ACPI _BST/_PSR always report zeros (0 %, AC offline), the fan sensor garbage, and the ASUS fan
-# modes/charge limit do nothing. proart_battery sends the same EC commands directly and registers
-# BAT1/ADP1, a fan sensor, a platform profile (GNOME power modes = ASUS silent/standard/performance)
-# and BAT1's charge_control_end_threshold. While it is loaded, the non-working ACPI BAT0/AC0/fan
-# are unbound. See docs/technical-notes.md.
+# The BIOS talks to the ASUS EC service over FF-A. With BIOS H7607BA.300 the AML reads its own
+# request back instead of the EC's answer (buffer fields on a Local that the FF-A Store rebinds):
+# ACPI _BST/_PSR report zeros (0 %, AC offline), the fan sensor garbage. BIOS .303 fixed the AML.
+# proart_battery checks at load which case it is (mode=auto):
+#  - broken EC path ("ec" mode): it sends the EC commands itself, registers BAT1/ADP1 and unbinds
+#    the non-working ACPI BAT0/AC0/fan/THRM/THZ0;
+#  - working EC path ("acpi" mode): the stock ACPI BAT0/AC0/fan stay, it adds
+#    charge_control_end_threshold to BAT0.
+# Both: a platform profile (GNOME power modes = ASUS silent/standard/performance), EC sensors,
+# UEFI power-off, and the PSYS/PSOC "thermal zones" (power in mW) are unbound.
+# See docs/technical-notes.md (section 3) and drivers/proart-battery/README.md.
 # Remove: modprobe -r proart_battery; dkms remove proart-battery/<version> --all;
 #         rm -rf /usr/src/proart-battery-* /etc/modules-load.d/proart-battery.conf \
 #         /etc/udev/rules.d/61-proart-battery.rules
@@ -54,10 +59,11 @@ udevadm trigger --action=change --subsystem-match=power_supply
 udevadm settle
 systemctl daemon-reload
 systemctl restart upower power-profiles-daemon
-dmesg | grep proart_battery | tail -3
+dmesg | grep proart_battery | tail -6
 echo "--- platform profile: $(cat /sys/firmware/acpi/platform_profile 2>/dev/null) ($(cat /sys/firmware/acpi/platform_profile_choices 2>/dev/null))"
 echo "--- fan: $(cat /sys/class/hwmon/hwmon*/fan1_input 2>/dev/null | head -1) rpm"
-for p in BAT1 ADP1; do
+for p in BAT0 AC0 BAT1 ADP1; do
+	[ -e /sys/class/power_supply/$p ] || continue
 	echo "--- $p"
 	# not every attribute exists on both supplies; a missing one must not end the script
 	grep -H . /sys/class/power_supply/$p/{status,capacity,energy_now,energy_full,power_now,voltage_now,cycle_count,charge_control_end_threshold,online} 2>/dev/null | sed 's#.*/##' || true

@@ -1,0 +1,209 @@
+From: Richard Fitzgerald <rf@opensource.cirrus.com>
+Subject: [PATCH] ASoC: cs35l56: Wait for firmware timer expiry before system suspend
+
+Backport to linux-nvidia 7.0 of linux-next commit 6cc7db9fdd ("ASoC: cs35l56:
+Wait for firmware timer expiry before system suspend",
+https://patch.msgid.link/20260915102110.3276924-1-rf@opensource.cirrus.com).
+CS35L56 B0 firmware older than 3.13.7 (this laptop runs the ASUS 3.13.4) must not
+see a SoundWire bus reset within 250 ms of a firmware timer start; wait for the
+timer before the system suspends. 7.0 context: the system_suspend wrapper and
+the private struct differ, CS35L56_FW_REQ_ACTIVE_TIMEOUT_MS is added here.
+[backport: proart-p16-linux]
+---
+diff --git a/include/sound/cs35l56.h b/include/sound/cs35l56.h
+index 28f9f5940..cfe9008e7 100644
+--- a/include/sound/cs35l56.h
++++ b/include/sound/cs35l56.h
+@@ -209,6 +209,12 @@ struct snd_ctl_elem_value;
+ 
+ #define CS35L56_GPIO_FN_GPIO				0x00000001
+ 
++/* DSP1_FW_VER */
++#define CS35L56_FW_MAIN_VERSION_MASK			GENMASK(19, 0)
++
++/* Firmware timer that must expire before a SoundWire bus reset (B0 < 3.13.7, B2 < 4.7.16) */
++#define CS35L56_FW_REQ_ACTIVE_TIMEOUT_MS		250
++
+ /* Mixer input sources */
+ #define CS35L56_INPUT_SRC_NONE				0x00
+ #define CS35L56_INPUT_SRC_ASP1RX1			0x08
+@@ -443,6 +449,7 @@ int cs35l56_cal_set_status_get(struct cs35l56_base *cs35l56_base,
+ int cs35l56_read_prot_status(struct cs35l56_base *cs35l56_base,
+ 			     bool *fw_missing, unsigned int *fw_version);
+ void cs35l56_warn_if_firmware_missing(struct cs35l56_base *cs35l56_base);
++bool cs35l56_needs_wait_for_firmware_timer_expiry(struct cs35l56_base *cs35l56_base);
+ void cs35l56_log_tuning(struct cs35l56_base *cs35l56_base, struct cs_dsp *cs_dsp);
+ int cs35l56_hw_init(struct cs35l56_base *cs35l56_base);
+ int cs35l56_get_speaker_id(struct cs35l56_base *cs35l56_base);
+diff --git a/sound/soc/codecs/cs35l56-sdw.c b/sound/soc/codecs/cs35l56-sdw.c
+index 8d7772894..16f5544f6 100644
+--- a/sound/soc/codecs/cs35l56-sdw.c
++++ b/sound/soc/codecs/cs35l56-sdw.c
+@@ -9,6 +9,7 @@
+ #include <linux/device.h>
+ #include <linux/err.h>
+ #include <linux/module.h>
++#include <linux/mutex.h>
+ #include <linux/pm_runtime.h>
+ #include <linux/regmap.h>
+ #include <linux/soundwire/sdw.h>
+@@ -34,6 +35,9 @@
+ #define CS35L56_LATE_READ_POLL_US	10
+ #define CS35L56_LATE_READ_TIMEOUT_US	1000
+ 
++static DEFINE_MUTEX(cs35l56_fw_idle_wait_lock);
++static bool cs35l56_fw_idle_wait_pending;
++
+ static int cs35l56_sdw_poll_mem_status(struct sdw_slave *peripheral,
+ 				       unsigned int mask,
+ 				       unsigned int match)
+@@ -472,9 +476,17 @@ static int __maybe_unused cs35l56_sdw_runtime_resume(struct device *dev)
+ 	return 0;
+ }
+ 
++static int cs35l56_sdw_system_suspend_prepare(struct device *dev)
++{
++	cs35l56_fw_idle_wait_pending = true;
++
++	return 0;
++}
++
+ static int __maybe_unused cs35l56_sdw_system_suspend(struct device *dev)
+ {
+ 	struct cs35l56_private *cs35l56 = dev_get_drvdata(dev);
++	int ret;
+ 
+ 	if (!cs35l56->base.init_done)
+ 		return 0;
+@@ -492,7 +504,19 @@ static int __maybe_unused cs35l56_sdw_system_suspend(struct device *dev)
+ 	sdw_write_no_pm(cs35l56->sdw_peripheral, CS35L56_SDW_GEN_INT_STAT_1, 0xFF);
+ 	flush_work(&cs35l56->sdw_irq_work);
+ 
+-	return cs35l56_system_suspend(dev);
++	ret = cs35l56_system_suspend(dev);
++	if (ret < 0)
++		return ret;
++
++	scoped_guard(mutex, &cs35l56_fw_idle_wait_lock) {
++		if (cs35l56_fw_idle_wait_pending && cs35l56->needs_wait_for_fw_idle) {
++			dev_dbg(cs35l56->base.dev, "Wait for FW timer expiry\n");
++			msleep(CS35L56_FW_REQ_ACTIVE_TIMEOUT_MS + 10);
++			cs35l56_fw_idle_wait_pending = false;
++		}
++	}
++
++	return 0;
+ }
+ 
+ static int __maybe_unused cs35l56_sdw_system_resume(struct device *dev)
+@@ -570,6 +594,7 @@ static void cs35l56_sdw_remove(struct sdw_slave *peripheral)
+ }
+ 
+ static const struct dev_pm_ops cs35l56_sdw_pm = {
++	.prepare = cs35l56_sdw_system_suspend_prepare,
+ 	SET_RUNTIME_PM_OPS(cs35l56_sdw_runtime_suspend, cs35l56_sdw_runtime_resume, NULL)
+ 	SYSTEM_SLEEP_PM_OPS(cs35l56_sdw_system_suspend, cs35l56_sdw_system_resume)
+ 	LATE_SYSTEM_SLEEP_PM_OPS(cs35l56_system_suspend_late, cs35l56_system_resume_early)
+diff --git a/sound/soc/codecs/cs35l56-shared.c b/sound/soc/codecs/cs35l56-shared.c
+index a32f8fe08..a441cec0a 100644
+--- a/sound/soc/codecs/cs35l56-shared.c
++++ b/sound/soc/codecs/cs35l56-shared.c
+@@ -1378,6 +1378,44 @@ void cs35l56_warn_if_firmware_missing(struct cs35l56_base *cs35l56_base)
+ }
+ EXPORT_SYMBOL_NS_GPL(cs35l56_warn_if_firmware_missing, "SND_SOC_CS35L56_SHARED");
+ 
++bool cs35l56_needs_wait_for_firmware_timer_expiry(struct cs35l56_base *cs35l56_base)
++{
++	unsigned int fw_ver;
++	bool prot_sts;
++	int ret;
++
++	switch (cs35l56_base->type) {
++	case 0x54:
++	case 0x56:
++	case 0x57:
++		switch (cs35l56_base->rev) {
++		case 0xb0:
++			ret = cs35l56_read_prot_status(cs35l56_base, &prot_sts, &fw_ver);
++			if (ret)
++				return true;
++
++			if ((fw_ver & CS35L56_FW_MAIN_VERSION_MASK) < 0x30d07)
++				return true;
++
++			return false;
++		case 0xb2:
++			ret = cs35l56_read_prot_status(cs35l56_base, &prot_sts, &fw_ver);
++			if (ret)
++				return true;
++
++			if ((fw_ver & CS35L56_FW_MAIN_VERSION_MASK) < 0x40710)
++				return true;
++
++			return false;
++		default:
++			return false;
++		}
++	default:
++		return false;
++	}
++}
++EXPORT_SYMBOL_NS_GPL(cs35l56_needs_wait_for_firmware_timer_expiry, "SND_SOC_CS35L56_SHARED");
++
+ void cs35l56_log_tuning(struct cs35l56_base *cs35l56_base, struct cs_dsp *cs_dsp)
+ {
+ 	__be32 pid, sid, tid;
+diff --git a/sound/soc/codecs/cs35l56.c b/sound/soc/codecs/cs35l56.c
+index 5d74f9fd8..3aff68d98 100644
+--- a/sound/soc/codecs/cs35l56.c
++++ b/sound/soc/codecs/cs35l56.c
+@@ -1506,6 +1506,10 @@ int cs35l56_system_resume(struct device *dev)
+ 
+ 	dev_dbg(dev, "system_resume\n");
+ 
++	/* Assume the firmware reset to default until we can check it */
++	if (cs35l56->base.init_done)
++		cs35l56->needs_wait_for_fw_idle = true;
++
+ 	/*
+ 	 * We might have done a hard reset or the CS35L56 was power-cycled
+ 	 * so wait for control port to be ready.
+@@ -1520,6 +1524,16 @@ int cs35l56_system_resume(struct device *dev)
+ 	if (ret)
+ 		return ret;
+ 
++	if (cs35l56->sdw_peripheral && cs35l56->base.init_done) {
++		ret = pm_runtime_resume_and_get(cs35l56->base.dev);
++		if (ret < 0)
++			return ret;
++
++		cs35l56->needs_wait_for_fw_idle =
++			cs35l56_needs_wait_for_firmware_timer_expiry(&cs35l56->base);
++		pm_runtime_put_autosuspend(cs35l56->base.dev);
++	}
++
+ 	/* Firmware won't have been loaded if the component hasn't probed */
+ 	if (!cs35l56->component)
+ 		return 0;
+@@ -1985,6 +1999,9 @@ int cs35l56_init(struct cs35l56_private *cs35l56)
+ 	if (ret)
+ 		return dev_err_probe(cs35l56->base.dev, ret, "Failed to write ASP1_CONTROL3\n");
+ 
++	cs35l56->needs_wait_for_fw_idle =
++		cs35l56_needs_wait_for_firmware_timer_expiry(&cs35l56->base);
++
+ 	cs35l56->base.init_done = true;
+ 	complete_all(&cs35l56->init_completion);
+ 
+diff --git a/sound/soc/codecs/cs35l56.h b/sound/soc/codecs/cs35l56.h
+index 691f857d0..9085cad5b 100644
+--- a/sound/soc/codecs/cs35l56.h
++++ b/sound/soc/codecs/cs35l56.h
+@@ -42,6 +42,7 @@ struct cs35l56_private {
+ 	bool sdw_irq_no_unmask;
+ 	bool soft_resetting;
+ 	bool sdw_attached;
++	bool needs_wait_for_fw_idle;
+ 	struct completion init_completion;
+ 
+ 	int speaker_id;
