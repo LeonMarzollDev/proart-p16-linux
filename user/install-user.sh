@@ -48,6 +48,13 @@ if [ "${1:-}" = "--remove" ]; then
 	exit 0
 fi
 
+# the crossover's limiters (LSP LV2 plugins): without them PipeWire cannot load 60-proart-2way.conf
+# and does not start at all
+[ "$(dpkg-query -W -f='${Status}' lsp-plugins-lv2 2>/dev/null)" = "install ok installed" ] || {
+	echo "ERROR: package lsp-plugins-lv2 is missing, PipeWire would not start with the crossover: run sudo bash install/03-audio.sh (or sudo apt install lsp-plugins-lv2)"
+	exit 1
+}
+
 echo "== 1/5 Tools -> $BIN"
 install -d "$BIN"
 for t in $TOOLS; do install -m 755 "$HERE/bin/$t" "$BIN/$t"; done

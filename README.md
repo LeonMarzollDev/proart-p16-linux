@@ -113,7 +113,7 @@ Run the root steps with `sudo` (or `pkexec`) from the repository folder, in this
 sudo bash install/01-kernel.sh        # linux-nvidia + NVIDIA kernel modules, acpi_osi, GRUB default
 sudo bash install/02-nvidia.sh        # NVIDIA user space
 sudo reboot
-sudo bash install/03-audio.sh         # UCM profile, ASUS speaker tuning, proart_audio
+sudo bash install/03-audio.sh         # UCM profile, ASUS speaker tuning, proart_audio, LSP limiters
 sudo bash install/04-battery.sh       # proart_battery: battery, fan modes, charge limit
 sudo bash install/05-keyboard.sh      # patched hid-asus (backlight levels + OSD, Fn-lock, no blinking)
 sudo bash install/06-touchpad.sh      # libinput quirk
