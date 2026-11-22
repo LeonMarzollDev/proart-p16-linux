@@ -64,6 +64,8 @@ check "speaker tuning loaded (cs35l56 firmware UID 10431484)" 'kmsg | grep -q "p
 check "speaker DSP firmware running" 'kmsg | grep -q "cs35l56.*DSP1: Firmware:"'
 # 51-proart-names.conf hides the woofer port; only the repo's UCM profile switches the woofer amps then
 check "UCM profile installed = repo (else: sudo bash install/03-audio.sh)" 'diff -rq "$REPO/config/ucm2/MediaTek/mt8901-soundwir" /usr/share/alsa/ucm2/MediaTek/mt8901-soundwir'
+# the crossover's limiters; without them PipeWire does not start
+check "lsp-plugins-lv2 installed (else: sudo bash install/03-audio.sh)" '[ "$(dpkg-query -W -f="\${Status}" lsp-plugins-lv2)" = "install ok installed" ]'
 check "WirePlumber names installed = repo (else: user/install-user.sh)" 'diff -q "$REPO/config/wireplumber/51-proart-names.conf" ~/.config/wireplumber/wireplumber.conf.d/51-proart-names.conf' WARN
 check "speaker sink proart_speakers" 'pw-cli ls Node | grep -q "node.name = \"proart_speakers\""'
 check "PipeWire never below 1024 samples (else the speakers xrun; user/install-user.sh)" 'pw-metadata -n settings 0 | grep -q "clock.min-quantum. value:.1024."'

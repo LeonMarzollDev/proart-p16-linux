@@ -8,6 +8,7 @@
 #     which is downloaded and unpacked (not executed) here. They are Cirrus Logic / ASUS licensed.
 #  3. proart_audio (DKMS): gives the amps the firmware UID "10431484". The MT8901 machine driver sets
 #     no PCI SSID, so without it cs35l56 only looks for generic files and loads no tuning.
+#  4. lsp-plugins-lv2: the limiters of the 2-way crossover. Without it PipeWire does not start.
 # The 2-way crossover (woofers + tweeters) is user-level: run user/install-user.sh after rebooting.
 #
 # Remove: dkms remove proart-audio/1.0 --all; rm -rf /usr/src/proart-audio-1.0 \
@@ -35,7 +36,8 @@ ln -sfn ../../MediaTek/mt8901-soundwir/mt8901-soundwir.conf "$UCM/conf.d/mt8901-
 
 echo "== 2/4 ASUS speaker tuning (CS35L56, SSID 1043:1484) from the ASUS Windows driver"
 apt_update
-apt-get install -y curl 7zip dkms build-essential
+# lsp-plugins-lv2 is for the crossover (user/install-user.sh), which PipeWire must load to start
+apt-get install -y curl 7zip dkms build-essential lsp-plugins-lv2
 curl -fL --retry 3 -o "$WORK/driver.exe" "$ASUS_URL"
 echo "$ASUS_SHA256  $WORK/driver.exe" | sha256sum -c -
 # The installer is an Inno Setup executable with the driver package appended as a 7z archive.

@@ -2,6 +2,11 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Print the PipeWire object id of a node.name.  Usage: pw-id <node.name>
 import json, subprocess, sys
-for o in json.loads(subprocess.run(["pw-dump"], capture_output=True, text=True).stdout):
+# pw-dump waits forever when no PipeWire daemon is running
+try:
+    dump = subprocess.run(["pw-dump"], capture_output=True, text=True, timeout=10).stdout
+except subprocess.TimeoutExpired:
+    sys.exit("pw-id: pw-dump got no answer within 10 s - is PipeWire running? (systemctl --user status pipewire)")
+for o in json.loads(dump):
     if o.get("type", "").endswith("Node") and o.get("info", {}).get("props", {}).get("node.name") == sys.argv[1]:
         print(o["id"]); break
