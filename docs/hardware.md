@@ -63,6 +63,7 @@ MT8901 routing used by the UCM profile (`HiFi-cs42l43-cs35l56x2.conf`):
 | `ACPI0004` (EC0) | ASUS EC methods (`RRA9`, `RWEC`, `GBST`) over FF-A | UUID `884a63a0-3285-4120-83aa-eec008a0a546`, partition `0x8003` |
 | `PNP0C0A` (BAT0) | battery | static data from shared memory `\_SB.B0DC/B0FC/B0DV`; live data broken -> `proart_battery` |
 | `ACPI0003` (AC0) | AC adapter | `_PSR` broken -> `proart_battery` (`ADP1`) |
+| `PNP0C0D` (LID0) | lid | `_LID` = `EC0.GLID` = EC command `0x13`/`0xe0`; always "open" on BIOS 300 -> `proart_battery` lid switch |
 | `USBC000` | UCSI (3 USB-C ports) | `ucsi_acpi` |
 
 FF-A partitions seen: `0x8001` (TPM CRB), `0x8002`, `0x8003` (EC services: management `330c1273`,

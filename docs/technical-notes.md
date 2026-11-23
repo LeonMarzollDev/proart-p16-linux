@@ -98,6 +98,37 @@ Measured on battery, 35 s full load on all cores, real clock from the CPPC feedb
 | Balanced | standard (1) | 3.0 GHz | up to 4800 rpm | 74 W |
 | Performance | performance (4) | 3.2 GHz (single cores 3.5) | up to 6500 rpm | 89 W |
 
+### Lid switch (proart_battery 1.9)
+
+Closing the lid never suspended; `/proc/acpi/button/lid/LID0/state` said "open" with the lid
+closed. `LID0._LID` returns `\_SB.EC0.GLID()`, which is `RWEC(1, 0xE0, {0x01}) & 1`. That is the
+broken path from above, and now it is clear where it breaks: every EC helper (`RWEC`, `RRA9`, `RRA8`,
+`WRA8`, `GBST`) builds its request in `Local0`, creates its fields (`BFX0`, `STAD`, ...) on that
+buffer and then does `Local0 = \_SB.FFA0.FFAC = Local0`. The store puts the response into a new
+object in `Local0`; the fields still point at the request. So the method reads its own request:
+for `GLID` the first dword is `0xE0010113` (`CMDD 0x13`, `FLAG 1`, `DNUM 1`, `ECMD 0xE0`), bit 0 is
+1, the lid is "open" forever. The EC's lid event (`QEVT 0x80` -> `Notify(LID0)`) never reaches
+logind either. On the generic Ubuntu kernel the FFH region fails outright (`AE_ERROR`).
+
+A one-shot probe (built like `drivers/proart-ffa-probe`) sent the same request to the ASUS service
+(partition `0x8003`): `FFA_MSG_SEND_DIRECT_REQ2` with x4 = `0x00000001e0010113` returns x4 = 1 with
+the lid open and x4 = 0 with it closed, all other registers 0.
+
+proart_battery 1.9 registers an `SW_LID` input device "ASUS ProArt P16 Lid Switch" and polls the
+EC every 250 ms; only exactly 0 or 1 with the other registers 0 counts, anything else keeps the
+last state, so a bad read can never suspend the laptop. It does this only where ACPI's lid is
+broken: at load it calls `\_SB.EC0.RWEC(1, 0xE0, {0x01})` itself. BIOS 300 returns `0xe0010113`
+(logged as `lid switch registered, ACPI lid broken (RWEC(1, 0xe0) = 0xe0010113), BIOS
+H7607BA.300`). BIOS H7607BA.303 (factory BIOS of later units, not offered for download) reportedly
+keeps the request in a named buffer (`Name (RBUF, ...)`), where the store copies the response into
+the buffer the fields point at; `RWEC` then returns 0 or 1, the driver logs "ACPI lid works" and
+leaves the lid to ACPI. `lid_switch=0/1` overrides the check.
+
+Verified on BIOS 300 (kernel 7.3.0-n1x2): three close/open cycles, each "Lid closed." -> s2idle ->
+"Lid opened." in the same second as the wake-up; opening the lid alone woke the laptop every time,
+no "closed" event while open. A close within 30 s of a resume suspends only once those 30 s are up
+(logind's `HoldoffTimeoutSec`).
+
 ## 4. Audio
 
 ### 4.1 UCM profile
@@ -414,7 +445,8 @@ The IR camera works (alternating lit/dark frames from the strobing emitter, henc
 
 ## 9. Not solved
 
-- Battery through ACPI (kernel FFH/AML response path) - worked around by `proart_battery`.
+- Battery and lid through ACPI (BIOS 300's AML reads its own request, see 3) - worked around by
+  `proart_battery`.
 - Dolby Atmos (Windows-only); EasyEffects presets are an approximation.
 - Ambient light sensor: behind the HID-over-SPI sensor hub `SENH` (`MSFW1111`, SPI3). Linux 7.0
   has no generic HID-over-SPI driver (the spi-hid series is still under review), so no automatic
