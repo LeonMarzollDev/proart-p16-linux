@@ -4,7 +4,7 @@ Install scripts, small kernel drivers and configuration that make **Linux work o
 P16 H7607BA**, the arm64 laptop with the **NVIDIA N1X ("RTX Spark") SoC** (Blackwell GPU, 20-core
 ARM CPU, MediaTek MT8901 platform blocks). With them, Ubuntu 26.04 gets a working battery
 indicator, speakers and microphone, keyboard, touchpad, touchscreen, keyboard backlight, Fn keys,
-suspend, GNOME power modes (ASUS fan modes), a battery charge limit, hardware sensors, haptic
+suspend (also on closing the lid), GNOME power modes (ASUS fan modes), a battery charge limit, hardware sensors, haptic
 touchpad clicks and GPU acceleration, including for snap apps.
 
 Everything here was worked out on one unit; see [docs/technical-notes.md](docs/technical-notes.md)
@@ -53,6 +53,7 @@ issue), so some fixes may help there too - reports welcome.
 | Keyboard backlight keeps blinking or fading, F4 does nothing | keyboard stays in ASUS OOBE demo mode | [`drivers/hid-asus-proart`](drivers/hid-asus-proart) |
 | Fn keys / Fn-lock (Fn+Esc) do nothing | no asus-wmi on arm64 | [`drivers/hid-asus-proart`](drivers/hid-asus-proart) |
 | After shutting down, the power button only works with the charger plugged in | PSCI power-off makes the EC cut the battery | [`drivers/proart-battery`](drivers/proart-battery) (powers off via UEFI) |
+| Closing the lid does nothing, the laptop stays on | BIOS 300's AML reads its own EC request back as the lid state: always "open" | [`drivers/proart-battery`](drivers/proart-battery) (lid switch) |
 | Laptop does not wake up from suspend | "deep" sleep instead of Modern Standby; PCIe ASPM L1.2 | s2idle in [`install/01-kernel.sh`](install/01-kernel.sh), ASPM left at `default` |
 | GNOME power modes do nothing, no Performance mode, fan always the same | ASUS fan modes only reachable through the EC | [`drivers/proart-battery`](drivers/proart-battery) |
 | No battery charge limit ("preserve battery health") | same | [`drivers/proart-battery`](drivers/proart-battery) |
@@ -89,6 +90,7 @@ issue), so some fixes may help there too - reports welcome.
 | Phone calls via a paired phone | - | GNOME Calls rings, answers, dials; call audio on the laptop; mute button (`optional/phone-handsfree.sh`) |
 | Webcam, IR camera | works | works; 50 Hz anti-flicker; optional face login (Howdy: login, lock screen, sudo, optionally admin dialogs) |
 | USB-C, second M.2 slot | works / slot empty | unchanged (second slot: 2280, single-sided SSDs only per ASUS) |
+| Lid switch | always "open": closing the lid does not suspend | works (`proart_battery` 1.9 reads the lid from the EC on BIOS 300): closing suspends, opening wakes (verified) |
 | Suspend (s2idle) | "deep" sleep never wakes up | wakes up reliably; **open:** after sleeps of more than a few minutes the internal mic stays silent and the speakers crackle until a reboot (audio state the firmware sets at boot is lost; under investigation), and the fans keep running while asleep |
 | Haptic touchpad feedback | no vibration on click | click felt on press and release (`proart-haptic.service`, strength adjustable) |
 | Battery through ACPI | - | **not working**: the EC echoes the ACPI requests; `proart_battery` is the workaround |

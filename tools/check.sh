@@ -55,6 +55,8 @@ else
 fi
 bogus=$(for t in /sys/class/thermal/thermal_zone*/temp; do v=$(cat $t 2>/dev/null); [ "${v:-0}" -gt 150000 ] && echo $t; done)
 [ -z "$bogus" ] && OK "no impossible temperatures" || WARN "thermal zones above 150 C: $bogus"
+# BIOS 300 reads its own request as the lid state ("open"); proart_battery then registers its own switch
+check "lid switch ($(kmsg | grep -o "proart_battery: lid switch registered\|proart_battery: ACPI lid works\|proart_battery: lid switch off" | tail -1 | sed 's/proart_battery: //'))" 'grep -q "ASUS ProArt P16 Lid Switch" /proc/bus/input/devices || kmsg | grep -q "proart_battery: ACPI lid works"'
 check "power off through UEFI (battery stays connected)" 'journalctl -k -b --no-pager | grep -q "powering off through UEFI ResetSystem"'
 check "UPower offers the charge limit" 'busctl get-property org.freedesktop.UPower /org/freedesktop/UPower/devices/battery_BAT1 org.freedesktop.UPower.Device ChargeThresholdSupported | grep -q true'
 

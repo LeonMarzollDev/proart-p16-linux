@@ -1,14 +1,15 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
-# ASUS ProArt P16 H7607BA - step 4: battery, AC adapter, fan, performance modes, charge limit
-# (proart_battery, DKMS)
+# ASUS ProArt P16 H7607BA - step 4: battery, AC adapter, fan, performance modes, charge limit,
+# lid switch (proart_battery, DKMS)
 #
 # The BIOS talks to the ASUS EC service over FF-A, but on Linux the responses never reach the AML:
 # ACPI _BST/_PSR always report zeros (0 %, AC offline), the fan sensor garbage, and the ASUS fan
 # modes/charge limit do nothing. proart_battery sends the same EC commands directly and registers
 # BAT1/ADP1, a fan sensor, a platform profile (GNOME power modes = ASUS silent/standard/performance)
 # and BAT1's charge_control_end_threshold. While it is loaded, the non-working ACPI BAT0/AC0/fan
-# are unbound. See docs/technical-notes.md.
+# are unbound. ACPI's lid always reads "open" on BIOS 300, so the driver adds a lid switch there.
+# See docs/technical-notes.md.
 # Remove: modprobe -r proart_battery; dkms remove proart-battery/<version> --all;
 #         rm -rf /usr/src/proart-battery-* /etc/modules-load.d/proart-battery.conf \
 #         /etc/udev/rules.d/61-proart-battery.rules

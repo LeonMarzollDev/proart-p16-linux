@@ -1,20 +1,21 @@
 # proart_battery
 
-Battery (`BAT1`), AC adapter (`ADP1`), ASUS fan/performance modes, battery charge limit and EC
-sensors (fan, temperatures, system/SoC power) for the ASUS ProArt P16 H7607BA (NVIDIA N1X).
+Battery (`BAT1`), AC adapter (`ADP1`), ASUS fan/performance modes, battery charge limit, EC
+sensors (fan, temperatures, system/SoC power) and lid switch for the ASUS ProArt P16 H7607BA
+(NVIDIA N1X).
 
 The BIOS talks to the ASUS EC service (FF-A partition 0x8003, UUID
 `884a63a0-3285-4120-83aa-eec008a0a546`) through an FFH operation region. On Linux the EC answers
 these requests correctly when they are sent directly, but the response never reaches the AML, so
-ACPI `_BST`/`_PSR` report zeros (0 %, AC offline), `_FST` reports garbage and the ASUS WMI methods
-do nothing. This driver sends the same commands itself (`FFA_MSG_SEND_DIRECT_REQ2`):
+ACPI `_BST`/`_PSR` report zeros (0 %, AC offline), `_FST` reports garbage, `_LID` always reports
+"open" and the ASUS WMI methods do nothing. This driver sends the same commands itself (`FFA_MSG_SEND_DIRECT_REQ2`):
 
 | EC command | x4 layout | result |
 |---|---|---|
 | `0x15` battery status | `0x15` | `status \| current<<16 \| remaining<<32 \| voltage<<48` (mA s16, mAh, mV) |
 | `0x0c` read register | `0x0c \| (0xfe000900 + reg)<<8 \| len<<40` | `0x90` bit 0 = AC present, `0xc6`/`0xc7` = fan rpm, `0x98`/`0x99` = EC temperature/critical (C) |
 | `0x0b` write register | as `0x0c`, value in x5 bits 8..39 | |
-| `0x13` EC command | `0x13 \| flag<<8 \| n<<16 \| cmd<<24 \| data<<32` | `0xc4` reads an EC register (`0x2e`/`0x2f` = cycle count), `0xc5` writes one; `0xcc`/`0xcd` read/write EC RAM (`0x0700` = second temperature) |
+| `0x13` EC command | `0x13 \| flag<<8 \| n<<16 \| cmd<<24 \| data<<32` | `0xc4` reads an EC register (`0x2e`/`0x2f` = cycle count), `0xc5` writes one; `0xcc`/`0xcd` read/write EC RAM (`0x0700` = second temperature); `0xe0` with data `0x01` = lid (1 open, 0 closed) |
 
 The ASUS WMI functions go through a mailbox in the registers (data `0x40`, command `0x6e`,
 control `0x6f`):
@@ -39,6 +40,20 @@ What the driver registers:
   `power1` "System" and `power2` "SoC". The power values come from the AML of the ACPI "thermal
   zones" `\_TZ.PSYS`/`\_TZ.PSOC`, which return mW (the platform's power monitor), not
   temperatures.
+- Lid switch "ASUS ProArt P16 Lid Switch" (`SW_LID`), only where ACPI's lid is broken (below):
+  the EC is read every `lid_poll_ms` (`0x13`, flag 1, cmd `0xe0`, data `0x01`, i.e. x4 =
+  `0x1e0010113`, AML `GLID`). Only an answer of exactly 0 or 1 with all other result registers 0
+  counts; after a failed read the switch keeps its last state (one warning per minute at most), so
+  a bad read never reports "closed". Polling stops for suspend and the state is read again on
+  resume. logind takes it like any lid switch (udev tags it `power-switch`).
+
+Lid self-check: at load the driver calls the firmware's own `\_SB.EC0.RWEC(1, 0xE0, {0x01})`, the
+read behind `LID0._LID`. BIOS 300 returns the request it sent (`0xe0010113`); kernels without the
+FFH handler fail the call. Then the lid switch is registered. A firmware whose AML gets the EC's
+answer returns 0 or 1 (reportedly BIOS 303); then ACPI's lid works and no switch is added. The
+decision and the BIOS version are logged, e.g. `proart_battery: lid switch registered, ACPI lid
+broken (RWEC(1, 0xe0) = 0xe0010113), BIOS H7607BA.300, lid open`. The ACPI lid device stays bound
+(it keeps saying "open"; logind treats the lid as closed when any switch reports closed).
 
 While loaded, the non-working ACPI `PNP0C0A:00` (BAT0), `ACPI0003:00` (AC0), `PNP0C0B:00` (fan) and
 the misleading thermal zones `\_TZ.PSYS`, `\_TZ.PSOC` (power shown as 1000-6000 C), `\_TZ.THRM`
@@ -57,7 +72,8 @@ audio codecs' power (speakers crackle, cs42l43 microphone/jack stays dead until 
 Without them s2idle works but draws ~11 W and the fans keep running.
 
 Module parameters: `poll_interval` (s, default 2; the EC raises no ACPI event on (un)plugging, so this is how fast a charger change shows up), `hide_acpi` (default 1), `efi_poweroff` (default 1),
-`standby_notify` (default 0, experimental).
+`standby_notify` (default 0, experimental), `lid_switch` (-1 = only if ACPI's lid is broken,
+default; 0 never; 1 always), `lid_poll_ms` (default 250, minimum 50).
 The module only loads on DMI vendor `ASUS` / board `H7607BA`.
 
 Install: `install/04-battery.sh` (DKMS). License: GPL-2.0.
