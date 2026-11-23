@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * proart_battery - battery, AC adapter, fan, performance modes and charge limit for the
- * ASUS ProArt P16 H7607BA (NVIDIA N1X)
+ * proart_battery - battery, AC adapter, fan, performance modes, charge limit and lid switch for
+ * the ASUS ProArt P16 H7607BA (NVIDIA N1X)
  *
  * The BIOS talks to the ASUS EC service over FF-A, but on Linux the responses never
  * reach the AML, so ACPI _BST/_PSR/_FST report zeros or garbage and the ASUS WMI
- * methods have no effect. This driver sends the same EC commands directly
- * (FFA_MSG_SEND_DIRECT_REQ2) and exposes the result as power supplies, a fan hwmon
- * and a platform profile. Static data (capacities, design voltage) comes from the EC
+ * methods have no effect; _LID always says "open". This driver sends the same EC commands
+ * directly (FFA_MSG_SEND_DIRECT_REQ2) and exposes the result as power supplies, a fan hwmon,
+ * a platform profile and a lid switch. Static data (capacities, design voltage) comes from the EC
  * shared memory the BIOS maps as \_SB.B0DC/B0FC/B0DV.
  *
  * EC command layouts (rawdata from x4 on, little endian), taken from the BIOS AML:
@@ -16,7 +16,8 @@
  *   0x0c read register:  x4 = 0x0c | (0xfe000900 + reg)<<8 | len<<40, response x4 = value
  *   0x0b write register: as 0x0c, value in x5 bits 8..39
  *   0x13 EC command:     x4 = 0x13 | flag<<8 | dnum<<16 | cmd<<24 | data<<32, response x4 = value
- *        (flag 1 = read; cmd 0xc4 reads, 0xc5 writes an EC register)
+ *        (flag 1 = read; cmd 0xc4 reads, 0xc5 writes an EC register; cmd 0xe0 data 1 = lid, AML
+ *        GLID: response x4 = 1 open, 0 closed)
  * The ASUS WMI functions use a mailbox in the registers (AML WEBC/REBC): data at 0x40,
  * command at 0x6e, control at 0x6f (bit 7 go/ready, bit 6 release, bit 5 read request).
  *   mailbox 0x11 [mode, 0]: thermal policy, ATKD DEVS 0x00120075 (1 standard, 4 performance, 2 silent)
@@ -29,11 +30,13 @@
 #include <linux/dmi.h>
 #include <linux/efi.h>
 #include <linux/hwmon.h>
+#include <linux/input.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/platform_profile.h>
 #include <linux/power_supply.h>
+#include <linux/ratelimit.h>
 #include <linux/reboot.h>
 #include <linux/suspend.h>
 #include <linux/uuid.h>
@@ -66,6 +69,7 @@
 #define EC_POLICY_SILENT	2
 #define EC_POLICY_PERFORMANCE	4
 #define EC_XREG_SILENT		0x05	/* EC register, bit 0 set in silent mode */
+#define EC_ECMD_LID		0xe0	/* EC command 0x13, data 1: bit 0 set while the lid is open */
 
 /* the EC raises no ACPI event when the charger is (un)plugged: polling is how changes are noticed */
 static unsigned int poll_interval = 2;
@@ -86,6 +90,16 @@ MODULE_PARM_DESC(standby_notify,
 static bool hide_acpi = true;
 module_param(hide_acpi, bool, 0444);
 MODULE_PARM_DESC(hide_acpi, "Unbind the non-working ACPI BAT0/AC0 while loaded (default true)");
+
+static int lid_switch = -1;
+module_param(lid_switch, int, 0444);
+MODULE_PARM_DESC(lid_switch,
+		 "Lid switch: -1 only if the ACPI lid is broken (default), 0 never, 1 always");
+
+/* the EC's lid event never reaches the ACPI lid device either: polling again */
+static unsigned int lid_poll_ms = 250;
+module_param(lid_poll_ms, uint, 0644);
+MODULE_PARM_DESC(lid_poll_ms, "Lid polling interval in ms (default 250, minimum 50)");
 
 struct proart_bat {
 	struct platform_device *pdev;
@@ -111,6 +125,8 @@ struct proart_bat {
 	struct work_struct resume_work;
 	struct device *acpi_bat_dev, *acpi_ac_dev, *acpi_fan_dev;
 	struct device *acpi_tz_dev[4];
+	struct input_dev *lid;
+	struct delayed_work lid_work;
 };
 
 /*
@@ -124,6 +140,11 @@ static const char * const misleading_tz[] = {
 
 static struct proart_bat *pb;
 
+static int ec_send_regs(struct ffa_send_direct_data2 *d)
+{
+	return pb->ffa->ops->msg_ops->sync_send_receive2(pb->ffa, d);
+}
+
 static int ec_send2(u64 x4, u64 x5, u64 *resp)
 {
 	struct ffa_send_direct_data2 d = { 0 };
@@ -131,7 +152,7 @@ static int ec_send2(u64 x4, u64 x5, u64 *resp)
 
 	d.data[0] = x4;
 	d.data[1] = x5;
-	ret = pb->ffa->ops->msg_ops->sync_send_receive2(pb->ffa, &d);
+	ret = ec_send_regs(&d);
 	if (ret)
 		return ret;
 	if (resp)
@@ -744,10 +765,165 @@ static struct platform_driver proart_pdrv = {
 	},
 };
 
+/*
+ * Lid: ACPI LID0._LID returns \_SB.EC0.GLID() = RWEC(1, 0xe0, {1}) & 1. In BIOS 300 RWEC reads
+ * its own request back (0xe0010113, bit 0 set), so the lid is always "open" and the EC's lid event
+ * (QEVT 0x80, Notify(LID0)) never arrives either. The EC answers the same request correctly.
+ * Only an answer of exactly 0 or 1 with all other result registers 0 (what the EC sends) counts:
+ * a lid wrongly seen as closed suspends the laptop.
+ */
+static int ec_read_lid(bool *open)
+{
+	struct ffa_send_direct_data2 d = { 0 };
+	int i, ret;
+
+	d.data[0] = EC_CMD_EC_COMMAND | 1ULL << 8 | 1ULL << 16 | (u64)EC_ECMD_LID << 24 | 1ULL << 32;
+	ret = ec_send_regs(&d);
+	if (ret)
+		return ret;
+	for (i = 1; i < ARRAY_SIZE(d.data); i++)
+		if (d.data[i])
+			return -EPROTO;
+	if (d.data[0] > 1)
+		return -EPROTO;
+	*open = d.data[0];
+	return 0;
+}
+
+static int proart_lid_update(void)
+{
+	bool open;
+	int ret;
+
+	mutex_lock(&pb->lock);
+	ret = ec_read_lid(&open);
+	mutex_unlock(&pb->lock);
+	if (ret)
+		return ret;
+	input_report_switch(pb->lid, SW_LID, !open);
+	input_sync(pb->lid);
+	return 0;
+}
+
+/* on a failed read the switch keeps its last state */
+static void proart_lid_work(struct work_struct *work)
+{
+	static DEFINE_RATELIMIT_STATE(rs, 60 * HZ, 1);
+	int ret;
+
+	ret = proart_lid_update();
+	if (ret && __ratelimit(&rs))
+		pr_warn("proart_battery: lid state not readable (%d), keeping \"%s\"\n", ret,
+			test_bit(SW_LID, pb->lid->sw) ? "closed" : "open");
+	schedule_delayed_work(&pb->lid_work, msecs_to_jiffies(max(lid_poll_ms, 50U)));
+}
+
+/*
+ * The firmware's own EC read, as _LID does it. BIOS 300 returns the request it sent (0xe0010113),
+ * kernels without the FFH handler fail the call; a firmware whose AML sees the EC's answer returns
+ * 0 or 1, and then ACPI's lid (button driver) works and this switch is not needed.
+ */
+static bool acpi_lid_works(char *res, size_t len)
+{
+	static u8 data[] = { 0x01 };
+	union acpi_object args[3] = {
+		{ .integer = { .type = ACPI_TYPE_INTEGER, .value = 1 } },
+		{ .integer = { .type = ACPI_TYPE_INTEGER, .value = EC_ECMD_LID } },
+		{ .buffer = { .type = ACPI_TYPE_BUFFER, .length = sizeof(data), .pointer = data } },
+	};
+	struct acpi_object_list arg_list = { ARRAY_SIZE(args), args };
+	struct acpi_buffer buf = { ACPI_ALLOCATE_BUFFER, NULL };
+	union acpi_object *obj;
+	acpi_status status;
+	bool works = false;
+
+	status = acpi_evaluate_object(NULL, "\\_SB.EC0.RWEC", &arg_list, &buf);
+	if (ACPI_FAILURE(status)) {
+		snprintf(res, len, "RWEC failed: %s", acpi_format_exception(status));
+		return false;
+	}
+	obj = buf.pointer;
+	if (obj && obj->type == ACPI_TYPE_INTEGER) {
+		snprintf(res, len, "RWEC(1, 0xe0) = %#llx", obj->integer.value);
+		works = obj->integer.value <= 1;
+	} else {
+		snprintf(res, len, "RWEC returned object type %d", obj ? (int)obj->type : -1);
+	}
+	ACPI_FREE(buf.pointer);
+	return works;
+}
+
+/* An extra like the performance modes: a failure only leaves the lid to ACPI */
+static void proart_lid_init(void)
+{
+	const char *bios = dmi_get_system_info(DMI_BIOS_VERSION);
+	bool works;
+	char res[48];
+	int ret;
+
+	if (!bios)
+		bios = "unknown";
+	if (!lid_switch) {
+		pr_info("proart_battery: lid switch off (lid_switch=0), BIOS %s\n", bios);
+		return;
+	}
+	works = acpi_lid_works(res, sizeof(res));
+	if (works && lid_switch < 0) {
+		pr_info("proart_battery: ACPI lid works (%s), no lid switch, BIOS %s\n", res, bios);
+		return;
+	}
+
+	pb->lid = input_allocate_device();
+	if (!pb->lid) {
+		pr_warn("proart_battery: lid switch not registered (out of memory)\n");
+		return;
+	}
+	pb->lid->name = "ASUS ProArt P16 Lid Switch";
+	pb->lid->phys = "proart-battery/input0";
+	pb->lid->id.bustype = BUS_HOST;
+	pb->lid->dev.parent = &pb->pdev->dev;
+	input_set_capability(pb->lid, EV_SW, SW_LID);
+	ret = input_register_device(pb->lid);
+	if (ret) {
+		pr_warn("proart_battery: lid switch not registered (%d)\n", ret);
+		input_free_device(pb->lid);
+		pb->lid = NULL;
+		return;
+	}
+	INIT_DELAYED_WORK(&pb->lid_work, proart_lid_work);
+	/* until the EC answers the switch says "open", as ACPI does */
+	ret = proart_lid_update();
+	pr_info("proart_battery: lid switch registered, %s (%s), BIOS %s, lid %s\n",
+		works ? "forced (lid_switch=1)" : "ACPI lid broken", res, bios,
+		ret ? "not readable" : test_bit(SW_LID, pb->lid->sw) ? "closed" : "open");
+	schedule_delayed_work(&pb->lid_work, msecs_to_jiffies(max(lid_poll_ms, 50U)));
+}
+
+static void proart_lid_exit(void)
+{
+	if (!pb->lid)
+		return;
+	cancel_delayed_work_sync(&pb->lid_work);
+	input_unregister_device(pb->lid);
+}
+
+/* no EC requests while the system sleeps; the state is read again right after resume */
 static int proart_pm_notify(struct notifier_block *nb, unsigned long action, void *data)
 {
-	if (action == PM_POST_SUSPEND)
+	switch (action) {
+	case PM_SUSPEND_PREPARE:
+	case PM_HIBERNATION_PREPARE:
+		if (pb->lid)
+			cancel_delayed_work_sync(&pb->lid_work);
+		break;
+	case PM_POST_SUSPEND:
 		schedule_work(&pb->resume_work);
+		fallthrough;
+	case PM_POST_HIBERNATION:
+		if (pb->lid)
+			schedule_delayed_work(&pb->lid_work, 0);
+		break;
+	}
 	return NOTIFY_DONE;
 }
 
@@ -954,6 +1130,7 @@ static int __init proart_bat_init(void)
 	}
 
 	proart_ec_extras_init();
+	proart_lid_init();
 	pb->pdrv_registered = !platform_driver_register(&proart_pdrv);
 	if (!pb->pdrv_registered)
 		pr_warn("proart_battery: no suspend callbacks, the EC is not told about sleep\n");
@@ -1006,6 +1183,7 @@ static void __exit proart_bat_exit(void)
 	unregister_pm_notifier(&pb->pm_nb);
 	cancel_work_sync(&pb->resume_work);
 	cancel_delayed_work_sync(&pb->work);
+	proart_lid_exit();
 	proart_ec_extras_exit();
 	power_supply_unregister(pb->bat);
 	power_supply_unregister(pb->ac);
@@ -1022,5 +1200,5 @@ static void __exit proart_bat_exit(void)
 module_init(proart_bat_init);
 module_exit(proart_bat_exit);
 
-MODULE_DESCRIPTION("Battery, AC adapter, fan, performance modes and charge limit via the ASUS EC FF-A service (ASUS ProArt P16 H7607BA, NVIDIA N1X)");
+MODULE_DESCRIPTION("Battery, AC adapter, fan, performance modes, charge limit and lid switch via the ASUS EC FF-A service (ASUS ProArt P16 H7607BA, NVIDIA N1X)");
 MODULE_LICENSE("GPL");
