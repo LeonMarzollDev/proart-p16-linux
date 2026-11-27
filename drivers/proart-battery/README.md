@@ -67,9 +67,15 @@ power-off handler that calls `ResetSystem(EfiResetShutdown)` first (`efi_powerof
 returns, PSCI powers off as before.
 
 Sleep: the Modern Standby notifications Windows sends the EC (display off `0xb7`, standby entry
-`0x9a`, sleep entry `0xae` and the reverse on wake) are implemented but off: the EC then cuts the
-audio codecs' power (speakers crackle, cs42l43 microphone/jack stays dead until a reboot).
-Without them s2idle works but draws ~11 W and the fans keep running.
+`0x9a`, sleep entry `0xae` and the reverse on wake) are implemented but off by default. Without
+them s2idle works but draws ~11 W and the fans keep running. With `standby_notify=1` the entry
+commands go out in the suspend_late phase (s2idle only), followed by a 3 s wait so that the EC's
+answer on its wake line (IRQ 72) is handled before device IRQs are suspended; otherwise that event
+ends every sleep after ~3 s. The exit commands go out in resume_early and are retried after
+resume (up to 20 x 100 ms), because the EC often does not take them that early and then keeps the
+fans off even under load; module load also sends an exit, which recovers an EC left in standby.
+Sent this way, speakers, microphone and jack keep working (BIOS 303 and 305). Sent in the noirq
+phase, as before, the EC cut the audio codecs' power.
 
 Module parameters: `poll_interval` (s, default 2; the EC raises no ACPI event on (un)plugging, so this is how fast a charger change shows up), `hide_acpi` (default 1), `efi_poweroff` (default 1),
 `standby_notify` (default 0, experimental), `lid_switch` (-1 = only if ACPI's lid is broken,

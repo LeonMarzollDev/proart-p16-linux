@@ -83,6 +83,7 @@ MODULE_PARM_DESC(efi_poweroff,
 
 /* off: the EC then cuts power to the audio codecs (crackling, cs42l43 does not recover) */
 static bool standby_notify;
+static bool standby_sent;	/* entry sent, exit not yet taken by the EC */
 module_param(standby_notify, bool, 0644);
 MODULE_PARM_DESC(standby_notify,
 		 "Tell the EC about sleep like Windows' Modern Standby _DSM (default false, experimental)");
@@ -712,43 +713,77 @@ static void proart_resume_work(struct work_struct *work)
  * AML forwards them to the EC as data-less commands, but through the broken FF-A path, and arm64
  * Linux does not call the _DSM anyway. Same order as Linux uses on x86 (drivers/acpi/x86/s2idle.c).
  * Without them the EC keeps the fans running during s2idle and the laptop draws ~11 W asleep.
- * They are sent in the noirq phase, after every other device (audio included) has suspended.
- * Either way (PM_SUSPEND_PREPARE or noirq) the EC then cuts the audio codecs' power: the speakers
- * crackle and the cs42l43 (microphone, jack, tweeters) only recovers after a reboot. Hence off by
- * default until the EC side is understood.
+ * Upstream sent them in the noirq phase. The EC answers the entry commands with an event on its
+ * wake line (IRQ 72, ACPI:Event) about 3 s later; with device IRQs already suspended that event
+ * ends every s2idle after ~3 s, and logind suspends again while the lid stays closed (a wake loop
+ * with the fans on). So, like omarchy-pkgs PR #1958 (patch 1123), send them in the late phase
+ * and wait 3 s, so the EC event is handled while IRQs still work; exit in resume_early.
+ * Sent in the noirq phase they also made the EC cut the audio codecs' power; sent late, speakers
+ * and microphone kept working (tested on BIOS 303 and 305).
  */
 /* display off, standby entry, sleep entry / sleep exit, standby exit, display on */
 static const u8 ec_standby_entry[] = { 0xb7, 0x9a, 0xae };
 static const u8 ec_standby_exit[] = { 0xaf, 0x9b, 0xb8 };
 
-static void ec_standby(const u8 *cmds, int n)
+/* Returns the number of commands the EC did not take. */
+static int ec_standby(const u8 *cmds, int n, bool quiet)
 {
-	int i;
+	int i, failed = 0;
 
 	mutex_lock(&pb->lock);
 	for (i = 0; i < n; i++)
-		if (ec_command(false, cmds[i], NULL, 0, NULL))
-			pr_warn("proart_battery: EC standby command %#x failed\n", cmds[i]);
+		if (ec_command(false, cmds[i], NULL, 0, NULL)) {
+			failed++;
+			if (!quiet)
+				pr_warn("proart_battery: EC standby command %#x failed\n", cmds[i]);
+		}
 	mutex_unlock(&pb->lock);
+	return failed;
 }
 
-static int proart_suspend_noirq(struct device *dev)
+/*
+ * The exit commands can fail in resume_early, before the EC's FF-A service answers again
+ * (all three failed after a 9 min sleep, and the EC then kept the fans off even at 75 C).
+ * Retry them once the system is back, until the EC takes them.
+ */
+static void ec_standby_exit_retry(void)
 {
-	if (standby_notify)
-		ec_standby(ec_standby_entry, ARRAY_SIZE(ec_standby_entry));
+	int i;
+
+	for (i = 0; i < 20 && standby_sent; i++) {
+		if (!ec_standby(ec_standby_exit, ARRAY_SIZE(ec_standby_exit), true)) {
+			standby_sent = false;
+			pr_info("proart_battery: EC standby exit sent after resume (retry %d)\n", i + 1);
+			return;
+		}
+		msleep(100);
+	}
+	if (standby_sent)
+		pr_err("proart_battery: EC standby exit failed, fans may stay off; reload proart_battery\n");
+}
+
+static int proart_suspend_late(struct device *dev)
+{
+	if (!standby_notify || pm_suspend_target_state != PM_SUSPEND_TO_IDLE)
+		return 0;
+	ec_standby(ec_standby_entry, ARRAY_SIZE(ec_standby_entry), false);
+	standby_sent = true;
+	/* Let the EC's delayed event arrive and be handled before suspend_device_irqs(). */
+	msleep(3000);
 	return 0;
 }
 
-static int proart_resume_noirq(struct device *dev)
+static int proart_resume_early(struct device *dev)
 {
-	if (standby_notify)
-		ec_standby(ec_standby_exit, ARRAY_SIZE(ec_standby_exit));
+	/* On failure standby_sent stays set and proart_pm_notify() retries. */
+	if (standby_sent && !ec_standby(ec_standby_exit, ARRAY_SIZE(ec_standby_exit), true))
+		standby_sent = false;
 	return 0;
 }
 
 static const struct dev_pm_ops proart_pm_ops = {
-	.suspend_noirq = proart_suspend_noirq,
-	.resume_noirq = proart_resume_noirq,
+	.suspend_late = proart_suspend_late,
+	.resume_early = proart_resume_early,
 };
 
 /* binds to the driver's own platform device, only for the PM callbacks above */
@@ -917,6 +952,7 @@ static int proart_pm_notify(struct notifier_block *nb, unsigned long action, voi
 			cancel_delayed_work_sync(&pb->lid_work);
 		break;
 	case PM_POST_SUSPEND:
+		ec_standby_exit_retry();
 		schedule_work(&pb->resume_work);
 		fallthrough;
 	case PM_POST_HIBERNATION:
@@ -1130,6 +1166,9 @@ static int __init proart_bat_init(void)
 	}
 
 	proart_ec_extras_init();
+	/* An EC left in standby by a failed exit keeps the fans off: take it out. */
+	if (standby_notify && ec_standby(ec_standby_exit, ARRAY_SIZE(ec_standby_exit), true))
+		pr_warn("proart_battery: EC standby exit at load not taken\n");
 	proart_lid_init();
 	pb->pdrv_registered = !platform_driver_register(&proart_pdrv);
 	if (!pb->pdrv_registered)
